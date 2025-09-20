@@ -17,10 +17,20 @@ interface Spark {
     maxLife: number;
 }
 
+interface Drop {
+    x: number;
+    y: number;
+    len: number;
+    speed: number;
+    alpha: number;
+}
+
 export const ElectricCurrentAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode }) => {
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
     const lightnings = React.useRef<Lightning[]>([]).current;
     const sparks = React.useRef<Spark[]>([]).current;
+    const drops = React.useRef<Drop[]>([]).current;
+    const flashRef = React.useRef(0); // global flash intensity 0..1
 
     React.useEffect(() => {
         const canvas = canvasRef.current;
@@ -31,6 +41,18 @@ export const ElectricCurrentAnimation: React.FC<ThemeAnimationProps> = ({ analys
         const resizeCanvas = () => {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
+            if (drops.length === 0) {
+                const count = Math.max(200, Math.floor((canvas.width * canvas.height) / 12000));
+                for (let i = 0; i < count; i++) {
+                    drops.push({
+                        x: Math.random() * canvas.width,
+                        y: Math.random() * canvas.height,
+                        len: 8 + Math.random() * 18,
+                        speed: 4 + Math.random() * 8,
+                        alpha: 0.2 + Math.random() * 0.4,
+                    });
+                }
+            }
         };
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
@@ -54,6 +76,8 @@ export const ElectricCurrentAnimation: React.FC<ThemeAnimationProps> = ({ analys
                 maxLife: 15,
                 intensity,
             });
+            // trigger brief global flash
+            flashRef.current = Math.min(1, flashRef.current + 0.8);
         };
 
         const createSpark = (x: number, y: number) => {
@@ -86,6 +110,27 @@ export const ElectricCurrentAnimation: React.FC<ThemeAnimationProps> = ({ analys
             gradient.addColorStop(1, '#0d0f19');
             ctx.fillStyle = gradient;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Rain layer
+            ctx.strokeStyle = 'rgba(173, 216, 230, 0.35)';
+            ctx.lineWidth = 1;
+            const rainBoost = 1 + audioLevel * 1.8;
+            for (let i = 0; i < drops.length; i++) {
+                const d = drops[i];
+                ctx.globalAlpha = d.alpha;
+                ctx.beginPath();
+                ctx.moveTo(d.x, d.y);
+                ctx.lineTo(d.x + 1, d.y + d.len);
+                ctx.stroke();
+                d.y += d.speed * rainBoost;
+                d.x += 0.3; // slight wind drift
+                if (d.y > canvas.height) {
+                    d.y = -10;
+                    d.x = Math.random() * canvas.width;
+                }
+                if (d.x > canvas.width + 10) d.x = -10;
+            }
+            ctx.globalAlpha = 1;
 
             // Create new lightning based on audio
             if (Math.random() < audioLevel * 0.8) {
@@ -164,8 +209,16 @@ export const ElectricCurrentAnimation: React.FC<ThemeAnimationProps> = ({ analys
             if (lightnings.length > 10) {
                 lightnings.splice(0, lightnings.length - 10);
             }
-            if (sparks.length > 100) {
-                sparks.splice(0, sparks.length - 100);
+            if (sparks.length > 120) {
+                sparks.splice(0, sparks.length - 120);
+            }
+
+            // Global lightning flash overlay
+            if (flashRef.current > 0) {
+                const f = flashRef.current;
+                ctx.fillStyle = `rgba(255,255,255,${0.12 * f})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                flashRef.current = Math.max(0, flashRef.current - 0.05);
             }
 
             animationFrameId = requestAnimationFrame(animate);
@@ -176,7 +229,7 @@ export const ElectricCurrentAnimation: React.FC<ThemeAnimationProps> = ({ analys
             window.removeEventListener('resize', resizeCanvas);
             cancelAnimationFrame(animationFrameId);
         };
-    }, [analyserNode, lightnings, sparks]);
+    }, [analyserNode, lightnings, sparks, drops]);
 
     return <canvas ref={canvasRef} className="fixed top-0 left-0 w-full h-full -z-10" />;
 };

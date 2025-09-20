@@ -29,12 +29,21 @@ interface Particle {
     maxLife: number;
 }
 
+interface Bird {
+    x: number;
+    y: number;
+    vx: number;
+    flap: number;
+    size: number;
+}
+
 export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode }) => {
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
     const waves = React.useRef<Wave[]>([]).current;
     const clouds = React.useRef<Cloud[]>([]).current;
     const particles = React.useRef<Particle[]>([]).current;
     const time = React.useRef(0);
+    const birds = React.useRef<Bird[]>([]).current;
 
     React.useEffect(() => {
         const canvas = canvasRef.current;
@@ -67,6 +76,19 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                         size: Math.random() * 80 + 40,
                         speed: Math.random() * 0.5 + 0.2,
                         opacity: Math.random() * 0.4 + 0.3,
+                    });
+                }
+            }
+
+            if (birds.length === 0) {
+                const count = Math.max(8, Math.floor(canvas.width / 180));
+                for (let i = 0; i < count; i++) {
+                    birds.push({
+                        x: Math.random() * canvas.width,
+                        y: 40 + Math.random() * canvas.height * 0.35,
+                        vx: 0.6 + Math.random() * 1.2,
+                        flap: Math.random() * Math.PI * 2,
+                        size: 6 + Math.random() * 6,
                     });
                 }
             }
@@ -135,22 +157,23 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
             ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
             ctx.fill();
 
-            // Sun rays
-            for (let i = 0; i < 12; i++) {
-                const angle = (i / 12) * Math.PI * 2 + time.current * 0.5;
-                const rayLength = 80 + audioLevel * 40;
-                const startX = sunX + Math.cos(angle) * (sunRadius + 10);
-                const startY = sunY + Math.sin(angle) * (sunRadius + 10);
-                const endX = sunX + Math.cos(angle) * (sunRadius + rayLength);
-                const endY = sunY + Math.sin(angle) * (sunRadius + rayLength);
-
+            // Birds (simple V-shape)
+            birds.forEach(b => {
+                b.x += b.vx;
+                b.flap += 0.2;
+                const amp = Math.sin(b.flap) * (b.size * 0.25);
+                if (b.x - b.size > canvas.width) {
+                    b.x = -20;
+                    b.y = 40 + Math.random() * canvas.height * 0.35;
+                    b.vx = 0.6 + Math.random() * 1.2;
+                }
+                ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+                ctx.lineWidth = 1.2;
                 ctx.beginPath();
-                ctx.moveTo(startX, startY);
-                ctx.lineTo(endX, endY);
-                ctx.strokeStyle = `rgba(255, 255, 100, ${0.6 + audioLevel * 0.4})`;
-                ctx.lineWidth = 3;
+                ctx.moveTo(b.x - b.size, b.y);
+                ctx.quadraticCurveTo(b.x, b.y - amp, b.x + b.size, b.y);
                 ctx.stroke();
-            }
+            });
 
             // Update and draw clouds
             clouds.forEach(cloud => {
@@ -233,6 +256,14 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                 ctx.lineWidth = 2;
                 ctx.stroke();
             });
+
+            // Sandy shoreline at bottom
+            const sandHeight = Math.max(60, canvas.height * 0.12);
+            const sandGradient = ctx.createLinearGradient(0, canvas.height - sandHeight, 0, canvas.height);
+            sandGradient.addColorStop(0, 'rgba(238, 214, 175, 0.85)');
+            sandGradient.addColorStop(1, 'rgba(210, 180, 140, 0.95)');
+            ctx.fillStyle = sandGradient;
+            ctx.fillRect(0, canvas.height - sandHeight, canvas.width, sandHeight);
 
             // Update and draw sparkles
             for (let i = particles.length - 1; i >= 0; i--) {

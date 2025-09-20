@@ -11,6 +11,7 @@ import { SnowStormAnimation } from './SnowStormAnimation';
 import { SummerAnimation } from './SummerAnimation';
 import { ElectricCurrentAnimation } from './ElectricCurrentAnimation';
 import { SimpleBlackAnimation } from './SimpleBlackAnimation';
+import { RainyWindowAnimation } from './RainyWindowAnimation';
 
 export interface ThemeAnimationProps {
     scrollOffset?: number;
@@ -46,6 +47,13 @@ export const THEMES: Theme[] = [
         description: 'Səslə canlanan, musiqiyə və səsə reaksiya verən interaktiv bir dumanlığa qərq olun. Ulduz tozuna çevirmək üçün kürələrə toxunun.',
         colors: ['#0d0f19', '#1b2026', '#c084fc'],
         animation: NebulaAnimation,
+    },
+    {
+        id: 'rainstorm',
+        name: 'İldırımlı Yağış',
+        description: 'Şimşək çaxması və yağış damcıları ilə dinamik fırtına səhnəsi.',
+        colors: ['#0d0f19', '#1b2026', '#60a5fa'],
+        animation: RainyWindowAnimation,
     },
     {
         id: 'matrix',

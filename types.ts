@@ -23,7 +23,7 @@ export interface Message {
   toolResult?: { call: ToolCall; output: any };
 }
 
-export type AppView = 'search' | 'news' | 'weather' | 'translate' | 'settings';
+export type AppView = 'search' | 'news' | 'weather' | 'translate' | 'settings' | 'profile';
 
 export interface VoiceOption {
   id: string;
@@ -61,6 +61,11 @@ export interface WeatherData {
         condition: string;
     }[];
     location: string;
+}
+
+export interface UserProfile {
+  name: string;
+  email: string;
 }
 
 declare global {

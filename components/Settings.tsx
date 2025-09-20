@@ -23,10 +23,71 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSettingsChange, 
       onSettingsChange({ ...settings, theme: themeId });
   };
 
+  // Profile (registration)
+  const [name, setName] = React.useState('');
+  const [email, setEmail] = React.useState('');
+  const [savedMsg, setSavedMsg] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem('nov-era-profile');
+      if (raw) {
+        const p = JSON.parse(raw) as { name?: string; email?: string };
+        if (p.name) setName(p.name);
+        if (p.email) setEmail(p.email);
+      }
+    } catch {}
+  }, []);
+
+  const handleSaveProfile = () => {
+    try {
+      const trimmedName = name.trim();
+      const trimmedEmail = email.trim();
+      localStorage.setItem('nov-era-profile', JSON.stringify({ name: trimmedName, email: trimmedEmail }));
+      setSavedMsg('Profil məlumatları yadda saxlandı.');
+      setTimeout(() => setSavedMsg(null), 2000);
+    } catch {
+      setSavedMsg('Profil saxlanılmadı.');
+      setTimeout(() => setSavedMsg(null), 2000);
+    }
+  };
+
   return (
     <div className="flex-grow overflow-y-auto p-8 bg-bg-jet/90 backdrop-blur-sm">
       <h1 className="text-4xl font-bold text-text-main mb-8">Ayarlar</h1>
       <div className="max-w-2xl mx-auto bg-bg-slate/80 p-6 rounded-lg space-y-6">
+        {/* Profile */}
+        <div>
+          <h2 className="text-xl font-semibold text-text-main mb-2">Profil</h2>
+          <p className="text-sm text-text-sub mb-4">Ad və e‑poçtunuzu qeyd edin.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ad"
+              className="bg-bg-onyx p-3 rounded-lg text-text-main focus:outline-none focus:ring-2"
+              style={{ ['--tw-ring-color' as any]: themeColor }}
+            />
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="E‑poçt"
+              className="bg-bg-onyx p-3 rounded-lg text-text-main focus:outline-none focus:ring-2"
+              style={{ ['--tw-ring-color' as any]: themeColor }}
+            />
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              onClick={handleSaveProfile}
+              className="px-4 py-2 rounded-md text-bg-jet"
+              style={{ backgroundColor: themeColor }}
+            >Yadda saxla</button>
+            {savedMsg && <span className="text-sm text-text-sub">{savedMsg}</span>}
+          </div>
+        </div>
+
         <div className="flex justify-between items-center">
           <div>
             <h2 className="text-lg font-semibold text-text-main">Səsli Cavabları Aktivləşdirin</h2>
