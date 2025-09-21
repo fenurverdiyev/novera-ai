@@ -241,6 +241,30 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                 ctx.restore();
             }
 
+            // Subtle sand beach at the very bottom
+            {
+                ctx.save();
+                const sandTop = canvas.height * 0.9;
+                const sandGrad = ctx.createLinearGradient(0, sandTop, 0, canvas.height);
+                sandGrad.addColorStop(0, 'rgba(206, 186, 140, 0.20)');
+                sandGrad.addColorStop(1, 'rgba(194, 178, 128, 0.35)');
+                ctx.fillStyle = sandGrad;
+                ctx.fillRect(0, sandTop, canvas.width, canvas.height - sandTop);
+
+                // Sparse speckles for texture (very lightweight)
+                ctx.globalAlpha = 0.12;
+                ctx.fillStyle = '#b49a6a';
+                for (let i = 0; i < 24; i++) {
+                    const sx = Math.random() * canvas.width;
+                    const sy = sandTop + Math.random() * (canvas.height - sandTop);
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, Math.random() * 1.2 + 0.4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1;
+                ctx.restore();
+            }
+
             // Sun
             const sunX = canvas.width * 0.85;
             const sunY = canvas.height * 0.15;
@@ -480,6 +504,27 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                 }
             });
 
+            // Water caustics overlay (lightweight sine bands)
+            {
+                ctx.save();
+                ctx.globalCompositeOperation = 'screen';
+                const bandAlpha = 0.05 + audioLevel * 0.06;
+                const yStart = canvas.height * 0.56;
+                const yEnd = canvas.height * 0.88;
+                for (let y = yStart; y < yEnd; y += 14) {
+                    ctx.beginPath();
+                    for (let x = 0; x <= canvas.width; x += 16) {
+                        const offset = Math.sin((x * 0.015) + time.current * 0.9) * 6 + Math.sin((y * 0.03) + time.current * 0.7) * 4;
+                        if (x === 0) ctx.moveTo(x, y + offset);
+                        else ctx.lineTo(x, y + offset);
+                    }
+                    ctx.strokeStyle = `rgba(255, 245, 200, ${bandAlpha})`;
+                    ctx.lineWidth = 0.8;
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
             // Sun reflection glint on water
             {
                 ctx.save();
@@ -493,7 +538,8 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                     for (let index = 0; index < waves.length; index++) {
                         const w = waves[index];
                         const par = Math.sin((x * 0.004) + time.current * (0.4 + index * 0.1)) * (index * 2 + audioLevel * 3);
-                        const waveHeight = Math.sin(x * w.frequency + w.phase) * (w.amplitude + audioLevel * 40);
+                        const waveHeight = Math.sin(x * w.frequency + w.phase) * 
+                                        (w.amplitude + audioLevel * 40);
                         const y = w.y + waveHeight + par;
                         if (!set || y < yRef) { yRef = y; set = true; }
                     }

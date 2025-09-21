@@ -1,5 +1,5 @@
 import type { NewsArticle } from '../types';
-import { searchNews as serperSearchNews } from './serperService';
+import { searchNews as serperSearchNews } from './searchService';
 
 const GNEWS_API_KEY = import.meta.env.VITE_GNEWS_API_KEY;
 

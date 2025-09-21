@@ -34,7 +34,7 @@ export const THEMES: Theme[] = [
         id: 'novera', 
         name: 'NovEra',
         description: 'Sadə qara fon ilə minimal və təmiz görünüş.',
-        colors: ['#0d0f19', '#1b2026', '#2196f3'],
+        colors: ['#000000', '#1b2026', '#58A6FF'],
         animation: SimpleBlackAnimation,
     },
     { 

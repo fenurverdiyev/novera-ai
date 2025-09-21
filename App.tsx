@@ -3,8 +3,14 @@ import { SearchBar } from './components/SearchBar';
 import { MessageDisplay } from './components/MessageDisplay';
 import { streamChatQuery, generateRelatedQuestions, answerWithGroundedSearch } from './services/geminiService';
 import { textToSpeech, AVAILABLE_VOICES } from './services/elevenLabsService';
-import { searchImagesAndVideos } from './services/searchService';
-import type { Message, AppView, AppSettings, ToolCall, SearchMode } from './types';
+import { 
+    searchImagesAndVideos, 
+    searchPlaces, 
+    searchNews, 
+    searchShopping, 
+    detectLocaleForSearch 
+} from './services/searchService';
+import type { Message, AppView, AppSettings, ToolCall, SearchMode, PlaceResult, ShoppingProduct } from './types';
 import { Sidebar } from './components/Sidebar';
 import { News } from './components/News';
 import { Weather } from './components/Weather';
@@ -38,13 +44,69 @@ const chunkText = (text: string): string[] => {
   return chunks.length > 0 ? chunks : [text];
 };
 
-// Simple visual intent detector for Universe mode
+// Simple visual/places intent detectors
 const hasVisualIntent = (q: string): boolean => {
   const s = q.toLowerCase();
   return [
     'şəkil', 'sekil', 'foto', 'fotolar', 'görüntü', 'image', 'images', 'pictures', 'pics',
-    'video', 'videolar', 'youtube', 'clip'
+    'video', 'videolar', 'youtube', 'clip', 'media'
   ].some(k => s.includes(k));
+};
+
+const hasPlaceIntent = (q: string): boolean => {
+  const s = q.toLowerCase();
+  return [
+    'xəritə', 'xerite', 'map', 'məkan', 'mekan', 'yer', 'ünvan', 'unvan',
+    'restoran', 'restoranlar', 'kafe', 'otel', 'otellər', 'hotel', 'market', 'aptek', 'clinic', 'clinic', 'müəssisə', 'magaza', 'mağaza',
+    'near me', 'yaxın', 'closest', 'ətrafda', 'etrafda', 'ailəvi', 'usaqli', 'uşaqlı', 'family'
+  ].some(k => s.includes(k));
+};
+
+const hasNewsIntent = (q: string): boolean => {
+  const s = q.toLowerCase();
+  return ['xəbər', 'news', 'son xəbərlər', 'updates', 'headlines'].some(k => s.includes(k));
+};
+
+const hasShoppingIntent = (q: string): boolean => {
+  const s = q.toLowerCase();
+  // Primary shopping cues
+  const shoppingWords = ['almaq', 'satın', 'buy', 'qiymət', 'price', 'mağaza', 'store', 'shop', 'məhsul', 'product', 'sifariş', 'endirim'];
+  if (shoppingWords.some(k => s.includes(k))) return true;
+  // Common phrasing in AZ: "tap" or "harada/haradan" for products
+  if (/(^|\s)(tap|harada|haradan)(\s|$)/.test(s)) return true;
+  // Heuristic: short brand/product queries (e.g., "nike air", "iphone 15")
+  const tokens = s.split(/\s+/).filter(Boolean);
+  const looksLikeProduct = /\b(iphone|ipad|macbook|samsung|xiaomi|nike|adidas|ps5|playstation|xbox|gpu|rtx|tv|laptop|kamera|kamera|qulaqciq|headphone|saat|watch)\b/.test(s);
+  return looksLikeProduct && tokens.length <= 5;
+};
+
+// Helper: build quick recommendations text for places
+const buildPlaceRecommendations = (places: PlaceResult[] | undefined | null): string => {
+  if (!places || places.length === 0) return '';
+  const top = [...places]
+    .filter(p => (p.rating || 0) > 0)
+    .sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    .slice(0, 3);
+  if (top.length === 0) return '';
+  const bullets = top.map(p => `• ${p.title}${p.rating ? ` — ⭐ ${p.rating.toFixed(1)}` : ''}${p.address ? ` • ${p.address}` : ''}`).join('\n');
+  return `\n\nTövsiyələr (məkanlar):\n${bullets}`;
+};
+
+// Helper: build quick recommendations text for products
+const buildProductRecommendations = (products: ShoppingProduct[] | undefined | null): string => {
+  if (!products || products.length === 0) return '';
+  const normalizePrice = (p?: string): number => {
+    if (!p) return Number.POSITIVE_INFINITY;
+    const m = p.replace(/[^0-9.,]/g, '').replace(',', '.');
+    const n = parseFloat(m);
+    return isNaN(n) ? Number.POSITIVE_INFINITY : n;
+  };
+  const top = [...products]
+    .slice(0, 10)
+    .sort((a, b) => (normalizePrice(a.price) - normalizePrice(b.price)))
+    .slice(0, 3);
+  const bullets = top.map(p => `• ${p.title}${p.price ? ` — ${p.price}` : ''}${p.source ? ` • ${p.source}` : ''}${p.rating ? ` • ⭐ ${p.rating.toFixed(1)}` : ''}`).join('\n');
+  return `\n\nTövsiyələr (məhsullar):\n${bullets}`;
 };
 
 const App: React.FC = () => {
@@ -71,7 +133,7 @@ const App: React.FC = () => {
       const savedSettings = localStorage.getItem('gemini-insight-settings');
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
-        return { noveraColor: '#0d0f19', ...parsed };
+        return { noveraColor: '#000000', ...parsed };
       }
     } catch (error) {
       console.error("Could not parse saved settings:", error);
@@ -80,7 +142,7 @@ const App: React.FC = () => {
       voiceEnabled: true,
       voiceId: AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ',
       theme: 'novera',
-      noveraColor: '#0d0f19',
+      noveraColor: '#000000',
     };
   });
   
@@ -111,12 +173,12 @@ const App: React.FC = () => {
   useEffect(() => {
     // Simulate app loading
     const timer = setTimeout(() => {
-        setIsAppReady(true);
-        const loadingScreen = document.getElementById('loading-screen');
-        if (loadingScreen) {
-            loadingScreen.classList.add('hidden');
-        }
-    }, 3000); // Show loading for 3 seconds
+      setIsAppReady(true);
+      const loadingScreen = document.getElementById('loading-screen');
+      if (loadingScreen) {
+        loadingScreen.classList.add('hidden');
+      }
+    }, 800); // Faster initial loading
     return () => clearTimeout(timer);
   }, []);
   
@@ -133,179 +195,47 @@ const App: React.FC = () => {
     try { localStorage.setItem('nov-era-search-mode', searchMode); } catch {}
   }, [searchMode]);
 
-  // Initialize Web Audio analyser for visualizations and playback routing
-  useEffect(() => {
-    if (audioRef.current && !audioSourceRef.current) {
-        try {
-            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-            const analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 256;
-            
-            const source = audioCtx.createMediaElementSource(audioRef.current);
-            source.connect(analyser);
-            analyser.connect(audioCtx.destination);
-            
-            audioContextRef.current = audioCtx;
-            analyserRef.current = analyser;
-            audioSourceRef.current = source;
-        } catch (e) {
-            console.error("Could not create AudioContext:", e);
-        }
-    }
-    return () => {
-        if (audioSourceRef.current) {
-            audioSourceRef.current.disconnect();
-            audioSourceRef.current = null;
-        }
-        if (analyserRef.current) {
-            analyserRef.current.disconnect();
-            analyserRef.current = null;
-        }
-        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-            audioContextRef.current.close().catch(console.error);
-            audioContextRef.current = null;
-        }
-    };
-  }, []);
-
-  useEffect(() => {
-    const unlockAudio = () => {
-      try {
-        if (audioContextRef.current?.state === 'suspended') {
-          audioContextRef.current.resume();
-        }
-      } catch (e) {
-        console.warn('AudioContext resume failed:', e);
-      }
-      window.removeEventListener('pointerdown', unlockAudio);
-    };
-    window.addEventListener('pointerdown', unlockAudio);
-    return () => window.removeEventListener('pointerdown', unlockAudio);
-  }, []);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, isLoading]);
-
   useEffect(() => {
     try {
       localStorage.setItem('nov-era-chat-history', JSON.stringify(messages));
     } catch {}
   }, [messages]);
 
-  const stopPlayback = useCallback(() => {
-      if (audioRef.current) {
-          audioRef.current.pause();
-          audioRef.current.src = '';
-      }
-      setPlayingMessageId(null);
-      currentPlayingMessageIdRef.current = null;
-      sentenceQueueRef.current = [];
-      isProcessingSentencesRef.current = false;
-      // Keep sentence audio cache for replay (do not clear here)
-  }, []);
-
-  const processVocalStream = useCallback(async () => {
-    if (isProcessingSentencesRef.current || sentenceQueueRef.current.length === 0 || !currentPlayingMessageIdRef.current) {
-        return;
-    }
-
-    isProcessingSentencesRef.current = true;
-    const sentence = sentenceQueueRef.current[0]; // Cümləni növbədən silmə
-
-    if (!sentence || !audioRef.current) {
-        isProcessingSentencesRef.current = false;
-        return;
-    }
-
+  const clearHistory = useCallback(() => {
     try {
-        // Növbəti cümlələri öncədən yüklə
-        const nextSentences = sentenceQueueRef.current.slice(1, 3);
-        nextSentences.forEach(nextSentence => {
-            if (nextSentence && sentenceAudioCacheRef.current[nextSentence] === undefined) {
-                sentenceAudioCacheRef.current[nextSentence] = null; // Yüklənməyə başladığını işarələ
-                textToSpeech(nextSentence, settings.voiceId).then(url => {
-                    sentenceAudioCacheRef.current[nextSentence] = url;
-                });
-            }
-        });
+      const current = messages;
+      if (current && current.length) {
+        const raw = localStorage.getItem('nov-era-sessions');
+        const sessions = raw ? JSON.parse(raw) : [];
+        const firstUser = current.find(m => m.role === 'user');
+        const title = (firstUser?.text || 'Adsız söhbət').slice(0, 40);
+        sessions.unshift({ id: Date.now(), title, time: Date.now(), messages: current });
+        localStorage.setItem('nov-era-sessions', JSON.stringify(sessions.slice(0, 50)));
+      }
+      localStorage.removeItem('nov-era-chat-history');
+    } catch {}
+    setMessages([]);
+    setActiveView('search');
+  }, [messages]);
 
-        let url = sentenceAudioCacheRef.current[sentence];
-        if (url === undefined || url === null) { // Əgər cache-də yoxdursa və ya hələ yüklənməyibsə
-            url = await textToSpeech(sentence, settings.voiceId);
-            sentenceAudioCacheRef.current[sentence] = url;
-        }
-
-        if (url && currentPlayingMessageIdRef.current) {
-            sentenceQueueRef.current.shift(); // Səs uğurla yükləndikdən sonra cümləni növbədən sil
-            audioRef.current.src = url;
-            if (audioContextRef.current?.state === 'suspended') {
-                await audioContextRef.current.resume();
-            }
-            await audioRef.current.play();
-        } else {
-            isProcessingSentencesRef.current = false;
-            setTimeout(processVocalStream, 100); // Uğursuz olarsa, bir az sonra yenidən cəhd et
-        }
-    } catch (error) {
-        console.error("Səs oxunarkən xəta baş verdi:", sentence, error);
-        // Surface error on the current message
-        if (currentPlayingMessageIdRef.current) {
-          setMessages(prev => prev.map(m => m.id === currentPlayingMessageIdRef.current ? { ...m, ttsError: 'Səsləndirmə mümkün olmadı. Zəhmət olmasa yenidən cəhd edin.' } : m));
-        }
-        sentenceQueueRef.current.shift(); // Xətalı cümləni atla
-        isProcessingSentencesRef.current = false;
-        processVocalStream(); // Növbəti cümləyə keç
-    }
-}, [settings.voiceId]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const handleAudioEnd = () => {
-        isProcessingSentencesRef.current = false;
-        processVocalStream(); // Növbəti cümləni oxu
-    };
-
-    audio.addEventListener('ended', handleAudioEnd);
-    return () => audio.removeEventListener('ended', handleAudioEnd);
-  }, [processVocalStream]);
-
-  const handlePlayAudio = (messageId: string, text: string) => {
-    if (playingMessageId === messageId) {
-        stopPlayback();
-        return;
-    }
-    stopPlayback();
-    // Clear any previous TTS error on this message when retrying
-    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, ttsError: undefined } : m));
-    const chunks = chunkText(text);
-    if (chunks.length === 0) return;
-
-    sentenceQueueRef.current = chunks;
-    currentPlayingMessageIdRef.current = messageId;
-    setPlayingMessageId(messageId);
-    processVocalStream();
-  };
+  const loadSession = useCallback((sessionMessages: Message[]) => {
+    try { localStorage.setItem('nov-era-chat-history', JSON.stringify(sessionMessages)); } catch {}
+    setMessages(sessionMessages);
+    setActiveView('search');
+  }, []);
 
   const handleSend = async (query: string, images?: string[], isVocalQuery: boolean = false) => {
     // Always close overlay; background TTS will continue
     setIsVoiceOverlayOpen(false);
-    stopPlayback();
     setIsLoading(true);
     const userMessage: Message = { id: Date.now().toString(), role: 'user', text: query };
     const modelMessageId = (Date.now() + 1).toString();
     const initialModelMessage: Message = {
       id: modelMessageId, role: 'model', text: '', sources: [], related: [],
-      isLoading: true, images: [], videos: [],
+      isLoading: true, images: [], videos: [], progressStep: 1,
     };
     
-    const history = messages.slice(-10);
+    const history = messages.slice(-10); // Son 5 sual-cavab cütü
     setMessages(prev => [...prev, userMessage, initialModelMessage]);
 
     try {
@@ -315,16 +245,69 @@ const App: React.FC = () => {
       const isGrounded = (searchMode === 'universe') || explicitGrounded;
 
       if (isGrounded) {
-        const { text, sources } = await answerWithGroundedSearch(groundedQuery);
-        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, text, sources } : msg));
-        // If visual intent, also fetch visuals via Serper
-        if (hasVisualIntent(groundedQuery)) {
-          const searchResult = await searchImagesAndVideos(groundedQuery, 6, 3);
-          setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
-            ...msg,
-            images: searchResult.images,
-            videos: searchResult.videos,
-          } : msg));
+        // Step 2: Searching (grounded)
+        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, progressStep: 2 } : msg));
+
+        // Prefetch Serper data in parallel while grounded answer is being generated
+        const willFetchVisualsG = hasVisualIntent(groundedQuery) || hasShoppingIntent(groundedQuery) || hasNewsIntent(groundedQuery) || hasPlaceIntent(groundedQuery);
+        const visualImgCountG = hasVisualIntent(groundedQuery) ? 6 : 4;
+        const visualVidCountG = hasVisualIntent(groundedQuery) ? 3 : 2;
+        const visualsPromiseG = willFetchVisualsG ? searchImagesAndVideos(groundedQuery, visualImgCountG, visualVidCountG) : null;
+        const placesPromiseG = hasPlaceIntent(groundedQuery) ? (async () => {
+          const { hl, gl } = detectLocaleForSearch();
+          return await searchPlaces(groundedQuery, 8, { hl, gl });
+        })() : null;
+        const newsPromiseG = hasNewsIntent(groundedQuery) ? searchNews(groundedQuery) : null;
+        const shoppingPromiseG = hasShoppingIntent(groundedQuery) ? searchShopping(groundedQuery) : null;
+
+        const { text, sources } = await answerWithGroundedSearch(groundedQuery, undefined, JSON.stringify(history));
+        // Step 3: Answering
+        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, text, sources, progressStep: 3 } : msg));
+
+        // Resolve any prefetches
+        if (visualsPromiseG) {
+          try {
+            const vr = await visualsPromiseG;
+            if (vr && (vr.images.length || vr.videos.length)) {
+              setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
+                ...msg,
+                images: Array.from(new Set([...(msg.images || []), ...vr.images])),
+                videos: Array.from(new Set([...(msg.videos || []), ...vr.videos]))
+              } : msg));
+            }
+          } catch {}
+        }
+        if (placesPromiseG) {
+          try {
+            const pr = await placesPromiseG;
+            if (pr && pr.length) {
+              setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, places: pr } : msg));
+              const rec = buildPlaceRecommendations(pr);
+              if (rec) {
+                setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
+              }
+            }
+          } catch {}
+        }
+        if (newsPromiseG) {
+          try {
+            const nr = await newsPromiseG;
+            if (nr && nr.length) {
+              setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, news: nr } : msg));
+            }
+          } catch {}
+        }
+        if (shoppingPromiseG) {
+          try {
+            const sr = await shoppingPromiseG;
+            if (sr && sr.length) {
+              setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, products: sr } : msg));
+              const rec = buildProductRecommendations(sr);
+              if (rec) {
+                setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
+              }
+            }
+          } catch {}
         }
         setIsLoading(false);
         return;
@@ -342,10 +325,36 @@ const App: React.FC = () => {
 
       const stream = streamChatQuery(groundedQuery, history, images);
 
+      // If we expect visuals/places/news/shopping, mark step 2 and prefetch in background
+      const willFetchVisuals = hasVisualIntent(groundedQuery) || hasShoppingIntent(groundedQuery) || hasNewsIntent(groundedQuery) || hasPlaceIntent(groundedQuery);
+      const willFetchPlaces = hasPlaceIntent(groundedQuery);
+      const willFetchNews = hasNewsIntent(groundedQuery);
+      const willFetchShopping = hasShoppingIntent(groundedQuery);
+
+      if (willFetchVisuals || willFetchPlaces || willFetchNews || willFetchShopping) {
+        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, progressStep: 2 } : msg));
+      }
+      const visualImgCount = hasVisualIntent(groundedQuery) ? 6 : 4;
+      const visualVidCount = hasVisualIntent(groundedQuery) ? 3 : 2;
+      const visualsPromise = willFetchVisuals ? searchImagesAndVideos(groundedQuery, visualImgCount, visualVidCount) : null;
+      const placesPromise = willFetchPlaces ? (async () => {
+        const { hl, gl } = detectLocaleForSearch();
+        return await searchPlaces(groundedQuery, 8, { hl, gl });
+      })() : null;
+      const newsPromise = willFetchNews ? searchNews(groundedQuery) : null;
+      const shoppingPromise = willFetchShopping ? searchShopping(groundedQuery) : null;
+
+      let firstChunk = true;
+
       for await (const chunk of stream) {
         if (chunk.text) {
           fullResponseText += chunk.text;
           sentenceAccumulator += chunk.text;
+          if (firstChunk) {
+            // Step 3: Answering
+            setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, progressStep: 3 } : msg));
+            firstChunk = false;
+          }
 
           if (isVocalQuery && settings.voiceEnabled) {
             let match;
@@ -410,7 +419,51 @@ const App: React.FC = () => {
       const relatedQuestions = await generateRelatedQuestions(groundedQuery, fullResponseText);
       setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, related: relatedQuestions } : msg));
       
-      // On-demand TTS: Do not auto-generate audio. User must press play button under the message.
+      // Resolve any prefetches
+      if (visualsPromise) {
+        try {
+          const vr = await visualsPromise;
+          if (vr && (vr.images.length || vr.videos.length)) {
+            setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
+              ...msg,
+              images: Array.from(new Set([...(msg.images || []), ...vr.images])),
+              videos: Array.from(new Set([...(msg.videos || []), ...vr.videos]))
+            } : msg));
+          }
+        } catch {}
+      }
+      if (placesPromise) {
+        try {
+          const pr = await placesPromise;
+          if (pr && pr.length) {
+            setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, places: pr } : msg));
+            const rec = buildPlaceRecommendations(pr);
+            if (rec) {
+              setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
+            }
+          }
+        } catch {}
+      }
+      if (newsPromise) {
+          try {
+              const nr = await newsPromise;
+              if (nr && nr.length) {
+                  setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, news: nr } : msg));
+              }
+          } catch {}
+      }
+      if (shoppingPromise) {
+          try {
+              const sr = await shoppingPromise;
+              if (sr && sr.length) {
+                  setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, products: sr } : msg));
+                  const rec = buildProductRecommendations(sr);
+                  if (rec) {
+                    setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
+                  }
+              }
+          } catch {}
+      }
     } catch (error) {
       console.error('An error occurred:', error);
       setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, text: "Üzr istəyirəm, xəta baş verdi. Zəhmət olmasa yenidən cəhd edin." } : msg));
@@ -443,11 +496,6 @@ const App: React.FC = () => {
   const handleScroll = (event: React.UIEvent<HTMLElement>) => {
     setScrollOffset(event.currentTarget.scrollTop);
   };
-
-  const clearHistory = useCallback(() => {
-    setMessages([]);
-    try { localStorage.removeItem('nov-era-chat-history'); } catch {}
-  }, []);
 
   const renderView = () => {
     switch (activeView) {
@@ -482,7 +530,6 @@ const App: React.FC = () => {
                             onVoiceClick={() => setIsVoiceOverlayOpen(true)} 
                             searchMode={searchMode}
                             onChangeMode={setSearchMode}
-                            onClearHistory={clearHistory}
                         />
                         <p className="text-center text-xs text-text-sub pb-3">
                         NovEra səhv edə bilər. Vacib məlumatları yoxlamağınız tövsiyə olunur.
@@ -496,16 +543,166 @@ const App: React.FC = () => {
   const ActiveAnimation = THEMES.find(t => t.id === settings.theme)?.animation;
   const activeThemeColor = THEMES.find(t => t.id === settings.theme)?.colors[2];
 
+  useEffect(() => {
+    // Initialize Web Audio analyser for visualizations and playback routing
+    if (audioRef.current && !audioSourceRef.current) {
+        try {
+            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 256;
+            
+            const source = audioCtx.createMediaElementSource(audioRef.current);
+            source.connect(analyser);
+            analyser.connect(audioCtx.destination);
+            
+            audioContextRef.current = audioCtx;
+            analyserRef.current = analyser;
+            audioSourceRef.current = source;
+        } catch (e) {
+            console.error("Could not create AudioContext:", e);
+        }
+    }
+    return () => {
+        if (audioSourceRef.current) {
+            audioSourceRef.current.disconnect();
+            audioSourceRef.current = null;
+        }
+        if (analyserRef.current) {
+            analyserRef.current.disconnect();
+            analyserRef.current = null;
+        }
+        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+            audioContextRef.current.close().catch(console.error);
+            audioContextRef.current = null;
+        }
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlockAudio = () => {
+      try {
+        if (audioContextRef.current?.state === 'suspended') {
+          audioContextRef.current.resume();
+        }
+      } catch (e) {
+        console.warn('AudioContext resume failed:', e);
+      }
+      window.removeEventListener('pointerdown', unlockAudio);
+    };
+    window.addEventListener('pointerdown', unlockAudio);
+    return () => window.removeEventListener('pointerdown', unlockAudio);
+  }, []);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isLoading]);
+
+  const stopPlayback = useCallback(() => {
+      if (audioRef.current) {
+          audioRef.current.pause();
+          audioRef.current.src = '';
+      }
+      setPlayingMessageId(null);
+      currentPlayingMessageIdRef.current = null;
+      sentenceQueueRef.current = [];
+      isProcessingSentencesRef.current = false;
+  }, []);
+
+  const processVocalStream = useCallback(async () => {
+    if (isProcessingSentencesRef.current || sentenceQueueRef.current.length === 0 || !currentPlayingMessageIdRef.current) {
+        return;
+    }
+
+    isProcessingSentencesRef.current = true;
+    const sentence = sentenceQueueRef.current[0];
+
+    if (!sentence || !audioRef.current) {
+        isProcessingSentencesRef.current = false;
+        return;
+    }
+
+    try {
+        const nextSentences = sentenceQueueRef.current.slice(1, 3);
+        nextSentences.forEach(nextSentence => {
+            if (nextSentence && sentenceAudioCacheRef.current[nextSentence] === undefined) {
+                sentenceAudioCacheRef.current[nextSentence] = null; 
+                textToSpeech(nextSentence, settings.voiceId).then(url => {
+                    sentenceAudioCacheRef.current[nextSentence] = url;
+                });
+            }
+        });
+
+        let url = sentenceAudioCacheRef.current[sentence];
+        if (url === undefined || url === null) {
+            url = await textToSpeech(sentence, settings.voiceId);
+            sentenceAudioCacheRef.current[sentence] = url;
+        }
+
+        if (url && currentPlayingMessageIdRef.current) {
+            sentenceQueueRef.current.shift();
+            audioRef.current.src = url;
+            if (audioContextRef.current?.state === 'suspended') {
+                await audioContextRef.current.resume();
+            }
+            await audioRef.current.play();
+        } else {
+            isProcessingSentencesRef.current = false;
+            setTimeout(processVocalStream, 100);
+        }
+    } catch (error) {
+        console.error("Səs oxunarkən xəta baş verdi:", sentence, error);
+        if (currentPlayingMessageIdRef.current) {
+          setMessages(prev => prev.map(m => m.id === currentPlayingMessageIdRef.current ? { ...m, ttsError: 'Səsləndirmə mümkün olmadı.' } : m));
+        }
+        sentenceQueueRef.current.shift();
+        isProcessingSentencesRef.current = false;
+        processVocalStream();
+    }
+}, [settings.voiceId]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleAudioEnd = () => {
+        isProcessingSentencesRef.current = false;
+        processVocalStream();
+    };
+
+    audio.addEventListener('ended', handleAudioEnd);
+    return () => audio.removeEventListener('ended', handleAudioEnd);
+  }, [processVocalStream]);
+
+  const handlePlayAudio = (messageId: string, text: string) => {
+    if (playingMessageId === messageId) {
+        stopPlayback();
+        return;
+    }
+    stopPlayback();
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, ttsError: undefined } : m));
+    const chunks = chunkText(text);
+    if (chunks.length === 0) return;
+
+    sentenceQueueRef.current = chunks;
+    currentPlayingMessageIdRef.current = messageId;
+    setPlayingMessageId(messageId);
+    processVocalStream();
+  };
+
   return (
     <div className={`flex h-screen bg-transparent text-text-main transition-opacity duration-500 ${isAppReady ? 'opacity-100' : 'opacity-0'}`}>
       {ActiveAnimation && (
         <ActiveAnimation
           scrollOffset={scrollOffset}
           analyserNode={analyserRef.current}
-          customColor={settings.theme === 'novera' ? (settings.noveraColor || '#0d0f19') : undefined}
+          customColor={settings.theme === 'novera' ? (settings.noveraColor || '#000000') : undefined}
         />
       )}
-      <Sidebar activeView={activeView} setActiveView={setActiveView} themeColor={activeThemeColor} />
+      <Sidebar activeView={activeView} setActiveView={setActiveView} onNewChat={clearHistory} themeColor={activeThemeColor} onOpenSession={loadSession} />
       <div className="flex-1 flex flex-col overflow-y-hidden">
         {renderView()}
       </div>

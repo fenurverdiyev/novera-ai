@@ -13,14 +13,51 @@ export interface Message {
   id: string;
   role: 'user' | 'model' | 'tool';
   text: string;
+  images?: string[];
+  videos?: string[];
+  places?: PlaceResult[];
+  news?: SearchNewsItem[];
+  products?: ShoppingProduct[];
   sources?: Source[];
   related?: string[];
   isLoading?: boolean;
   ttsError?: string;
-  images?: string[];
-  videos?: string[];
+  progressStep?: 1 | 2 | 3; // 1: Thinking, 2: Searching, 3: Answering
   toolCalls?: ToolCall[];
   toolResult?: { call: ToolCall; output: any };
+}
+
+// Chat/search lightweight news item (from Serper news endpoint)
+export interface SearchNewsItem {
+  title: string;
+  link: string;
+  source: string;
+  date: string;
+  snippet: string;
+  thumbnail?: string;
+}
+
+// Full news article used by News page
+export interface NewsArticle {
+  id: string;
+  title: string;
+  summary: string | null;
+  url: string;
+  source: string;
+  imageUrl: string | null;
+  publishedAt: string;
+  content?: string | null;
+  category?: string;
+}
+
+export interface ShoppingProduct {
+  title: string;
+  link: string;
+  price: string;
+  source: string;
+  rating?: number;
+  reviews?: number;
+  imageUrl?: string;
 }
 
 export type AppView = 'search' | 'news' | 'weather' | 'translate' | 'settings' | 'profile';
@@ -39,36 +76,37 @@ export interface AppSettings {
   noveraColor?: string; // custom background color for NovEra theme
 }
 
-export interface NewsArticle {
-    id: string;
-    title: string;
-    summary: string | null;
-    url: string;
-    source: string;
-    imageUrl: string | null;
-    publishedAt: string;
-    content?: string | null;
-    category?: string;
-    language?: string;
-    country?: string[];
-}
-
 export interface WeatherData {
-    current: {
-        temp: number;
-        condition: string;
-    };
-    forecast: {
-        day: string;
-        temp: number;
-        condition: string;
-    }[];
-    location: string;
+  current: {
+    temp: number;
+    condition: string;
+  };
+  forecast: {
+    day: string;
+    temp: number;
+    condition: string;
+  }[];
+  location: string;
 }
 
 export interface UserProfile {
   name: string;
   email: string;
+}
+
+// Normalized place result for Google Maps/Local via Serper
+export interface PlaceResult {
+  title: string;
+  rating?: number | null;
+  reviewsCount?: number | null;
+  address?: string | null;
+  phoneNumber?: string | null;
+  category?: string | null;
+  thumbnailUrl?: string | null;
+  website?: string | null;
+  mapsUrl?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 declare global {

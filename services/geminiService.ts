@@ -1,15 +1,12 @@
 // Fix: The `FunctionDeclarationTool` type does not exist in `@google/genai`. It has been replaced with the correct `Tool` type.
 import { GoogleGenAI, Type, Content, Tool } from "@google/genai";
 import type { Source, NewsArticle, WeatherData, Message } from '../types';
-import { searchWeb as serperSearchWeb, SerperResponse, detectLocaleForSearch } from './serperService';
+import { searchWeb as serperSearchWeb, SerperResponse, detectLocaleForSearch } from './searchService';
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
-if (!GEMINI_API_KEY) {
-    throw new Error("VITE_GEMINI_API_KEY environment variable not set");
-}
-  
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+// Do not crash the app if the API key is missing; degrade gracefully instead
+const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 const model = 'gemini-1.5-flash-latest';
 
 // Add new device assistant functions
@@ -149,9 +146,16 @@ const mapMessagesToContent = (messages: Message[]): Content[] => {
 export async function* streamChatQuery(
     prompt: string,
     history: Message[],
-    images: string[] = []
+    images: string[] = [],
+    memory?: string,
 ): AsyncGenerator<{ text?: string; sources?: Source[], images?: string[], videos?: string[], toolCalls?: any[] }> {
-    const systemInstruction = "Sən NovEra adlı bir köməkçi assistantsan və bütün cavablarını Azərbaycan dilində verməlisən. İstifadəçinin sorğusu şəkil, video və ya hər hansı bir vizual məlumat axtarışını nəzərdə tutursa, `webSearch` alətini çağırmaq MƏCBURİDİR. Məsələn, 'pişik şəkilləri' sorğusu üçün `webSearch({query: 'pişiklər'})` çağırmalısan. Alətdən istifadə etmədən vizual məzmun haqqında cavab vermə. Alətdən gələn nəticələri təsvir edərkən detallı ol.";
+    if (!ai) {
+        // Graceful fallback when no API key is provided
+        yield { text: 'AI cavabı hazırda aktiv deyil (VITE_GEMINI_API_KEY qurulmayıb). Zəhmət olmasa ayarlarda API açarını əlavə edin.' };
+        return;
+    }
+    const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
+    const systemInstruction = "Sən NovEra adlı bir köməkçi assistantsan və bütün cavablarını Azərbaycan dilində verməlisən. İstifadəçinin sorğusu şəkil, video və ya hər hansı bir vizual məlumat axtarışını nəzərdə tutursa, `webSearch` alətini çağırmaq MƏCBURİDİR. Məsələn, 'pişik şəkilləri' sorğusu üçün `webSearch({query: 'pişiklər'})` çağırmalısan. Alətdən istifadə etmədən vizual məzmun haqqında cavab vermə. Alətdən gələn nəticələri təsvir edərkən detallı ol." + memoryBlock;
     
     const historicContent = mapMessagesToContent(history);
     
@@ -241,6 +245,7 @@ export async function* streamChatQuery(
  * @returns An array of related questions.
  */
 export async function generateRelatedQuestions(prompt: string, answer: string): Promise<string[]> {
+    if (!ai) return [];
     try {
         const fullPrompt = `Based on the following question and its answer, generate 3 concise and relevant follow-up questions that a curious user might ask next.
 IMPORTANT: The questions MUST be in the Azerbaijani language.
@@ -286,14 +291,15 @@ Return the questions as a JSON array of strings.`;
  * @returns A summary of the article.
  */
 export async function analyzeNewsArticle(article: NewsArticle): Promise<string> {
+    if (!ai) return "AI təhlili hazırda əlçatmazdır. Xahiş edirik sonra yenidən cəhd edin.";
     try {
         const prompt = `Please analyze the following news article. Provide a concise, neutral summary covering the key points, any potential biases detected, and the wider implications of the story.
         IMPORTANT: Your entire response MUST be in the Azerbaijani language.
 
-        Article Title: "${article.title}"
-        Article Content: "${(article.content || article.summary || '').substring(0, 3000)}"
+Article Title: "${article.title}"
+Article Content: "${(article.content || article.summary || '').substring(0, 3000)}"
 
-        Return the analysis as a single block of text.`;
+Return the analysis as a single block of text.`;
 
         const response = await ai.models.generateContent({
             model,
@@ -314,6 +320,9 @@ export async function analyzeNewsArticle(article: NewsArticle): Promise<string> 
  */
 export async function getWeather(location: string): Promise<WeatherData> {
     try {
+        if (!ai) {
+            throw new Error('AI açarı yoxdur. Hava məlumatı üçün Open-Meteo modulundan istifadə edin.');
+        }
         const response = await ai.models.generateContent({
             model,
             contents: `Get the current weather and a 5-day forecast for the location: "${location}".
@@ -397,6 +406,10 @@ export async function translateText(text: string, targetLang: string): Promise<s
         return "";
     }
     try {
+        if (!ai) {
+            // Fallback: no translation available
+            return text;
+        }
         const response = await ai.models.generateContent({
             model,
             contents: `Translate the following text to ${targetLang}. Return only the translated text, with no additional commentary or explanations. Text to translate: "${text}"`,
@@ -413,7 +426,7 @@ export async function translateText(text: string, targetLang: string): Promise<s
  * respond using those results as context. Returns the model's text and normalized sources.
  * This does not stream; it performs a single request for simplicity.
  */
-export async function answerWithGroundedSearch(query: string, opts?: { num?: number; gl?: string; hl?: string }) {
+export async function answerWithGroundedSearch(query: string, opts?: { num?: number; gl?: string; hl?: string }, memory?: string) {
   // 1) Get web results via Serper (using dev proxy or serverless proxy hidden behind serperService)
   const { hl, gl } = { hl: opts?.hl, gl: opts?.gl } as { hl?: string; gl?: string };
   const locale = (!hl || !gl) ? detectLocaleForSearch() : { hl, gl } as { hl: string; gl: string };
@@ -427,15 +440,25 @@ export async function answerWithGroundedSearch(query: string, opts?: { num?: num
     index: i + 1,
   }));
 
+  // If AI is not available, return a simple sources-based answer instead of failing
+  if (!ai) {
+    const list = organic.slice(0, 6).map((r, i) => `${i + 1}) ${r.title} — ${r.link}`).join('\n');
+    const text = organic.length
+      ? `Axtarış nəticələri (Serper):\n${list}\n\nDaha dəqiq cavab üçün AI açarını (VITE_GEMINI_API_KEY) konfiqurasiya edin.`
+      : 'Uyğun nəticə tapılmadı.';
+    return { text, sources };
+  }
+
   // Build compact context block for the model
   const context = organic.slice(0, 8).map((r, i) => (
     `[${i + 1}] ${r.title}\n${r.snippet}\n${r.link}`
   )).join("\n\n");
 
+  const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
   const systemInstruction = `Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver.\n\n` +
-    `Aşağıdakı VEB KONTEXTİ-dən (Serper nəticələri) istifadə et.\n` +
-    `MÜTLƏQ şəkildə iddialarını [1], [2], ... kimi mənbələrlə istinad et.\n` +
-    `Əgər kontekstdə cavab yoxdursa, bunu de və ehtiyatlı cavab ver.\n`;
+     `Aşağıdakı VEB KONTEXTİ-dən (Serper nəticələri) istifadə et.\n` +
+     `MÜTLƏQ şəkildə iddialarını [1], [2], ... kimi mənbələrlə istinad et.\n` +
+     `Əgər kontekstdə cavab yoxdursa, bunu de və ehtiyatlı cavab ver.\n` + memoryBlock;
 
   const contents: Content[] = [
     { role: 'user', parts: [{ text: `SORĞU:\n${query}\n\nVEB KONTEXTİ:\n${context}` }] },
