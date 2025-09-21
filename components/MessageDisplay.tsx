@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { Message } from '../types';
 import { BotIcon, UserIcon, PlayIcon, PauseIcon } from './Icons';
 import { SourcePill } from './SourcePill';
@@ -130,6 +130,14 @@ const VideoPreview: React.FC<{ url: string }> = ({ url }) => {
 export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelatedQuery, onPlayAudio, playingMessageId }) => {
   const isUser = message.role === 'user';
   const isPlaying = message.id === playingMessageId;
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('nov-era-avatar');
+      setAvatarUrl(stored);
+    } catch {}
+  }, []);
 
   const handlePlayClick = () => {
     onPlayAudio(message.id, message.text);
@@ -140,7 +148,11 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
       <div className="max-w-4xl mx-auto px-4 flex gap-4">
         <div className="flex-shrink-0">
           {isUser ? (
-            <UserIcon className="w-8 h-8 text-text-sub" />
+            avatarUrl ? (
+              <img src={avatarUrl} alt="Profil" className="w-8 h-8 rounded-full object-cover border border-bg-onyx" />
+            ) : (
+              <UserIcon className="w-8 h-8 text-text-sub" />
+            )
           ) : (
             <BotIcon className="w-8 h-8 text-accent" />
           )}

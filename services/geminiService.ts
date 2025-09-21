@@ -1,6 +1,7 @@
 // Fix: The `FunctionDeclarationTool` type does not exist in `@google/genai`. It has been replaced with the correct `Tool` type.
 import { GoogleGenAI, Type, Content, Tool } from "@google/genai";
 import type { Source, NewsArticle, WeatherData, Message } from '../types';
+import { searchWeb as serperSearchWeb, SerperResponse, detectLocaleForSearch } from './serperService';
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
@@ -405,4 +406,50 @@ export async function translateText(text: string, targetLang: string): Promise<s
         console.error("Error translating text:", error);
         throw new Error("Tərcümə etmək mümkün olmadı.");
     }
+}
+
+/**
+ * Answers a query by first performing a Serper web search and then asking Gemini to
+ * respond using those results as context. Returns the model's text and normalized sources.
+ * This does not stream; it performs a single request for simplicity.
+ */
+export async function answerWithGroundedSearch(query: string, opts?: { num?: number; gl?: string; hl?: string }) {
+  // 1) Get web results via Serper (using dev proxy or serverless proxy hidden behind serperService)
+  const { hl, gl } = { hl: opts?.hl, gl: opts?.gl } as { hl?: string; gl?: string };
+  const locale = (!hl || !gl) ? detectLocaleForSearch() : { hl, gl } as { hl: string; gl: string };
+  const serper: SerperResponse | null = await serperSearchWeb(query, Math.min(opts?.num ?? 8, 12), { gl: locale.gl, hl: locale.hl });
+  const organic = serper?.organic || [];
+
+  // Normalize top sources
+  const sources: Source[] = organic.slice(0, 6).map((r, i) => ({
+    uri: r.link,
+    title: r.title || new URL(r.link).hostname,
+    index: i + 1,
+  }));
+
+  // Build compact context block for the model
+  const context = organic.slice(0, 8).map((r, i) => (
+    `[${i + 1}] ${r.title}\n${r.snippet}\n${r.link}`
+  )).join("\n\n");
+
+  const systemInstruction = `Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver.\n\n` +
+    `Aşağıdakı VEB KONTEXTİ-dən (Serper nəticələri) istifadə et.\n` +
+    `MÜTLƏQ şəkildə iddialarını [1], [2], ... kimi mənbələrlə istinad et.\n` +
+    `Əgər kontekstdə cavab yoxdursa, bunu de və ehtiyatlı cavab ver.\n`;
+
+  const contents: Content[] = [
+    { role: 'user', parts: [{ text: `SORĞU:\n${query}\n\nVEB KONTEXTİ:\n${context}` }] },
+  ];
+
+  const response = await ai.models.generateContent({
+    model,
+    contents,
+    config: {
+      // We pass context inline; official Google Search grounding can be wired later.
+      systemInstruction,
+    },
+  });
+
+  const text = response.text?.trim() || '';
+  return { text, sources };
 }

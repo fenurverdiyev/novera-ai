@@ -1,6 +1,6 @@
 import React from 'react';
 import type { AppView } from '../types';
-import { SearchIcon, NewsIcon, WeatherIcon, TranslateIcon, SettingsIcon } from './Icons';
+import { SearchIcon, NewsIcon, WeatherIcon, TranslateIcon, SettingsIcon, UserIcon } from './Icons';
 import { Logo } from './Logo';
 
 interface SidebarProps {
@@ -14,6 +14,7 @@ const navItems = [
   { id: 'news', icon: NewsIcon, label: 'Xəbərlər' },
   { id: 'weather', icon: WeatherIcon, label: 'Hava' },
   { id: 'translate', icon: TranslateIcon, label: 'Tərcümə' },
+  { id: 'profile', icon: UserIcon, label: 'Profil' },
   { id: 'settings', icon: SettingsIcon, label: 'Ayarlar' },
 ] as const;
 

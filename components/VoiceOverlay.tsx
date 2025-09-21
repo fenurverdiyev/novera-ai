@@ -12,13 +12,20 @@ interface VoiceOverlayProps {
 
 type ConversationState = 'idle' | 'listening' | 'processing' | 'responding';
 
-const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+// Check for speech recognition support
+const getSpeechRecognition = () => {
+    if (typeof window !== 'undefined') {
+        return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    }
+    return null;
+};
 
 export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQuery, liveResponse, isResponding }) => {
     const [transcript, setTranscript] = useState('');
     const [isCameraActive, setIsCameraActive] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [conversationState, setConversationState] = useState<ConversationState>('idle');
+    const [speechSupported, setSpeechSupported] = useState(false);
 
     const recognitionRef = useRef<any>(null);
     const finalTranscriptRef = useRef<string>('');
@@ -72,81 +79,130 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
         setConversationState('idle');
     };
     
+    // Check speech recognition support on mount
+    useEffect(() => {
+        const SpeechRecognition = getSpeechRecognition();
+        setSpeechSupported(!!SpeechRecognition);
+        
+        if (!SpeechRecognition) {
+            setError('Brauzeriniz səs tanıma funksiyasını dəstəkləmir. Chrome və ya Edge istifadə edin.');
+            return;
+        }
+
+        // Initialize speech recognition
+        try {
+            const recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = 'az-AZ'; // Azerbaijani
+            
+            recognition.onstart = () => {
+                console.log('Speech recognition started');
+                setError(null);
+            };
+            
+            recognition.onresult = (event: any) => {
+                let interimTranscript = '';
+                let finalTranscript = '';
+                
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const transcript = event.results[i][0].transcript;
+                    if (event.results[i].isFinal) {
+                        finalTranscript += transcript;
+                    } else {
+                        interimTranscript += transcript;
+                    }
+                }
+                
+                if (finalTranscript) {
+                    finalTranscriptRef.current += finalTranscript;
+                }
+                
+                setTranscript(finalTranscriptRef.current + interimTranscript);
+                
+                // Reset silence timer on speech
+                if (silenceTimerRef.current) {
+                    clearTimeout(silenceTimerRef.current);
+                }
+                
+                // Set new silence timer
+                silenceTimerRef.current = setTimeout(() => {
+                    if (shouldBeListeningRef.current && finalTranscriptRef.current.trim()) {
+                        handleStopListening();
+                    }
+                }, 3000); // 3 seconds of silence
+            };
+            
+            recognition.onerror = (event: any) => {
+                console.error('Speech recognition error:', event.error);
+                let errorMessage = 'Səs tanıma xətası baş verdi.';
+                
+                switch (event.error) {
+                    case 'network':
+                        errorMessage = 'İnternet bağlantısı problemi.';
+                        break;
+                    case 'not-allowed':
+                        errorMessage = 'Mikrofon icazəsi verilməyib. Brauzer ayarlarından mikrofon icazəsini verin.';
+                        break;
+                    case 'no-speech':
+                        errorMessage = 'Səs eşidilmədi. Yenidən cəhd edin.';
+                        break;
+                    case 'audio-capture':
+                        errorMessage = 'Mikrofon problemi. Mikrofonun düzgün bağlandığını yoxlayın.';
+                        break;
+                }
+                
+                setError(errorMessage);
+                setConversationState('idle');
+                shouldBeListeningRef.current = false;
+            };
+            
+            recognition.onend = () => {
+                console.log('Speech recognition ended');
+                if (shouldBeListeningRef.current && conversationState === 'listening') {
+                    // Restart if we should still be listening
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        console.error('Failed to restart recognition:', e);
+                        setError('Səs tanıma yenidən başladıla bilmədi.');
+                        setConversationState('idle');
+                        shouldBeListeningRef.current = false;
+                    }
+                }
+            };
+            
+            recognitionRef.current = recognition;
+        } catch (e) {
+            console.error('Failed to initialize speech recognition:', e);
+            setError('Səs tanıma başladıla bilmədi.');
+            setSpeechSupported(false);
+        }
+        
+        return () => {
+            if (recognitionRef.current) {
+                try {
+                    recognitionRef.current.stop();
+                } catch (e) {
+                    console.error('Error stopping recognition:', e);
+                }
+            }
+        };
+    }, [conversationState]);
+    
     useEffect(() => {
         if (!isOpen) {
             cleanup();
             return;
         }
 
-        if (!SpeechRecognition) {
-            setError('Səs tanıma bu brauzerdə dəstəklənmir.');
+        if (!speechSupported) {
+            setError('Brauzeriniz səs tanıma funksiyasını dəstəkləmir. Chrome və ya Edge istifadə edin.');
             return;
         }
 
-        try {
-            if (!recognitionRef.current) {
-                const recognition = new SpeechRecognition();
-                recognition.continuous = true;
-                recognition.interimResults = true;
-                recognition.lang = 'az-AZ';
-
-                recognition.onresult = (event: any) => {
-                    let final_transcript = '';
-                    let interim_transcript = '';
-
-                    for (let i = 0; i < event.results.length; i++) {
-                        const transcript_part = event.results[i][0].transcript;
-                        if (event.results[i].isFinal) {
-                            final_transcript += transcript_part + ' ';
-                        } else {
-                            interim_transcript += transcript_part;
-                        }
-                    }
-
-                    finalTranscriptRef.current = final_transcript;
-                    setTranscript(final_transcript + interim_transcript);
-
-                    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-
-                    if (event.results[event.results.length - 1].isFinal) {
-                        silenceTimerRef.current = setTimeout(() => {
-                            console.log("Silence detected, submitting query.");
-                            handleToggleListen(); // This will now act as the 'stop' action
-                        }, 1200); // Submit after 1.2s of silence
-                    }
-                };
-
-                recognition.onerror = (event: any) => {
-                    console.error('Speech recognition error:', event.error);
-                     if (event.error !== 'no-speech' && event.error !== 'aborted') {
-                        setError(`Səs tanıma xətası: ${event.error}`);
-                        shouldBeListeningRef.current = false;
-                        setConversationState('idle');
-                    }
-                };
-                
-                recognition.onstart = () => {
-                    setConversationState('listening');
-                };
-                
-                recognition.onend = () => {
-                    if (shouldBeListeningRef.current) {
-                        console.log("Recognition ended unexpectedly, restarting...");
-                        setTimeout(() => recognitionRef.current?.start(), 100);
-                    } else {
-                        setConversationState('idle');
-                    }
-                };
-
-                recognitionRef.current = recognition;
-            }
-        } catch (err) {
-            console.error("Failed to create SpeechRecognition instance:", err);
-            setError("Səs tanıma xidmətini başlatmaq mümkün olmadı.");
-        }
-
         return cleanup;
-    }, [isOpen]);
+    }, [isOpen, speechSupported]);
     
     const handleToggleListen = () => {
         const recognition = recognitionRef.current;

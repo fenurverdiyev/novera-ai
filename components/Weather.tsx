@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { getWeather } from '../services/geminiService';
+import React, { useEffect, useRef, useState } from 'react';
+import { getWeatherByCityName, getWeatherByLocationKey, searchCityAutocomplete, getTopCities, convertToAccuFormat, type AccuCitySuggestion } from '../services/accuWeatherService';
 import type { WeatherData } from '../types';
 import { LoadingSpinner, SunIcon, CloudIcon, CloudRainIcon, CloudSnowIcon, WindIcon, AlertTriangleIcon, SearchIcon, WeatherIcon as WeatherIconComponent } from './Icons';
 
@@ -28,6 +28,10 @@ export const Weather: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [location, setLocation] = useState('');
+    const [suggestions, setSuggestions] = useState<AccuCitySuggestion[]>([]);
+    const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+    const [showDropdown, setShowDropdown] = useState(false);
+    const blurTimeout = useRef<number | null>(null);
 
     const handleSearch = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -37,7 +41,7 @@ export const Weather: React.FC = () => {
         setError(null);
         setWeather(null);
         try {
-            const weatherData = await getWeather(location);
+            const weatherData = await getWeatherByCityName(location);
             setWeather(weatherData);
         } catch (e: any) {
             setError(e.message || `"${location}" üçün hava məlumatı tapılmadı.`);
@@ -45,6 +49,46 @@ export const Weather: React.FC = () => {
             setLoading(false);
         }
     };
+
+    const handleSelectSuggestion = async (s: AccuCitySuggestion) => {
+        setShowDropdown(false);
+        setLocation(`${s.LocalizedName}${s.AdministrativeArea ? ', ' + s.AdministrativeArea.LocalizedName : ''}, ${s.Country.LocalizedName}`);
+        setLoading(true);
+        setError(null);
+        setWeather(null);
+        try {
+            const data = await getWeatherByLocationKey(s.Key);
+            setWeather(data);
+        } catch (e: any) {
+            setError(e.message || 'Hava məlumatı alına bilmədi.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Debounced suggestions loader
+    useEffect(() => {
+        let active = true;
+        const t = window.setTimeout(async () => {
+            try {
+                setLoadingSuggestions(true);
+                if (!location.trim() || location.trim().length < 2) {
+                    const top = await getTopCities(12);
+                    if (!active) return;
+                    setSuggestions(top.map(convertToAccuFormat));
+                } else {
+                    const res = await searchCityAutocomplete(location.trim());
+                    if (!active) return;
+                    setSuggestions(res.map(convertToAccuFormat));
+                }
+            } catch (e) {
+                if (active) setSuggestions([]);
+            } finally {
+                if (active) setLoadingSuggestions(false);
+            }
+        }, 250);
+        return () => { active = false; window.clearTimeout(t); };
+    }, [location]);
 
     const renderContent = () => {
         if (loading) {
@@ -112,7 +156,9 @@ export const Weather: React.FC = () => {
                     <input
                         type="text"
                         value={location}
-                        onChange={(e) => setLocation(e.target.value)}
+                        onChange={(e) => { setLocation(e.target.value); setShowDropdown(true); }}
+                        onFocus={() => setShowDropdown(true)}
+                        onBlur={() => { blurTimeout.current = window.setTimeout(() => setShowDropdown(false), 150); }}
                         placeholder="Şəhər və ya bölgə daxil edin..."
                         className="w-full bg-bg-slate p-4 pr-20 rounded-lg text-text-main focus:outline-none focus:ring-2 focus:ring-accent"
                         aria-label="Məkan axtarışı"
@@ -120,9 +166,38 @@ export const Weather: React.FC = () => {
                     <button type="submit" disabled={loading} className="absolute right-2 top-1/2 -translate-y-1/2 bg-accent text-bg-jet p-2 rounded-md hover:bg-opacity-80 transition-colors disabled:bg-bg-onyx" aria-label="Axtar">
                        {loading ? <LoadingSpinner className="w-6 h-6" /> : <SearchIcon className="w-6 h-6" />}
                     </button>
+
+                    {/* Suggestions dropdown */}
+                    {showDropdown && (
+                      <div className="absolute z-20 left-0 right-0 mt-2 bg-bg-slate border border-bg-onyx rounded-lg shadow-xl max-h-80 overflow-auto" onMouseDown={(e) => e.preventDefault()}>
+                        <div className="flex items-center justify-between px-3 py-2 text-xs text-text-sub">
+                          <span>{location.trim().length < 2 ? 'Məşhur şəhərlər' : 'Təkliflər'}</span>
+                          {loadingSuggestions && <LoadingSpinner className="w-4 h-4" />}
+                        </div>
+                        {suggestions.length === 0 && !loadingSuggestions ? (
+                          <div className="px-4 py-3 text-sm text-text-sub">Heç nə tapılmadı</div>
+                        ) : (
+                          <ul className="divide-y divide-bg-onyx/50">
+                            {suggestions.map((s) => (
+                              <li key={s.Key}>
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => handleSelectSuggestion(s)}
+                                  className="w-full text-left px-4 py-2 hover:bg-bg-onyx/60 transition-colors"
+                                >
+                                  <div className="text-text-main text-sm font-medium">{s.LocalizedName}{s.AdministrativeArea ? `, ${s.AdministrativeArea.LocalizedName}` : ''}</div>
+                                  <div className="text-text-sub text-xs">{s.Country.LocalizedName}</div>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
                 </div>
             </form>
             {renderContent()}
         </div>
     );
-};
+}

@@ -25,6 +25,8 @@ export interface Message {
 
 export type AppView = 'search' | 'news' | 'weather' | 'translate' | 'settings' | 'profile';
 
+export type SearchMode = 'base' | 'universe';
+
 export interface VoiceOption {
   id: string;
   name: string;
@@ -34,6 +36,7 @@ export interface AppSettings {
   voiceEnabled: boolean;
   voiceId: string;
   theme: string;
+  noveraColor?: string; // custom background color for NovEra theme
 }
 
 export interface NewsArticle {

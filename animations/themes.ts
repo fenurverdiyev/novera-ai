@@ -12,10 +12,13 @@ import { SummerAnimation } from './SummerAnimation';
 import { ElectricCurrentAnimation } from './ElectricCurrentAnimation';
 import { SimpleBlackAnimation } from './SimpleBlackAnimation';
 import { RainyWindowAnimation } from './RainyWindowAnimation';
+import { FallingLeavesAnimation } from './FallingLeavesAnimation';
+import { NeonCrystalsAnimation } from './NeonCrystalsAnimation';
 
 export interface ThemeAnimationProps {
     scrollOffset?: number;
     analyserNode?: AnalyserNode | null;
+    customColor?: string; // optional background/accent color
 }
 
 interface Theme {
@@ -54,6 +57,13 @@ export const THEMES: Theme[] = [
         description: 'Şimşək çaxması və yağış damcıları ilə dinamik fırtına səhnəsi.',
         colors: ['#0d0f19', '#1b2026', '#60a5fa'],
         animation: RainyWindowAnimation,
+    },
+    {
+        id: 'crystals',
+        name: 'Neon Aurora',
+        description: 'Axıcı neon aurora dalğaları — yüngül və performanslı.',
+        colors: ['#0d0f19', '#0ea5e9', '#a78bfa'],
+        animation: NeonCrystalsAnimation,
     },
     {
         id: 'matrix',
@@ -105,6 +115,13 @@ export const THEMES: Theme[] = [
         animation: SummerAnimation,
     },
     {
+        id: 'autumn',
+        name: 'Payız Yarpaqları',
+        description: 'Səslə küləklənən, parallax effektli düşən yarpaqlar.',
+        colors: ['#0d0f19', '#2a1b16', '#f59e0b'],
+        animation: FallingLeavesAnimation,
+    },
+    {
         id: 'electric',
         name: 'Elektrik Cərəyanı',
         description: 'Səsə reaksiya verən elektrik şimşəkləri və enerji dalğaları.',
@@ -119,3 +136,5 @@ export const THEMES: Theme[] = [
         animation: SpaceAnimation,
     },
 ];
+
+// 'crystals' now shows Neon Aurora (aurora neon ribbons), optimized for performance.

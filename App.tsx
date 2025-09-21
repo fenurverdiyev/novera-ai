@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { SearchBar } from './components/SearchBar';
 import { MessageDisplay } from './components/MessageDisplay';
-import { streamChatQuery, generateRelatedQuestions } from './services/geminiService';
+import { streamChatQuery, generateRelatedQuestions, answerWithGroundedSearch } from './services/geminiService';
 import { textToSpeech, AVAILABLE_VOICES } from './services/elevenLabsService';
 import { searchImagesAndVideos } from './services/searchService';
-import type { Message, AppView, AppSettings, ToolCall } from './types';
+import type { Message, AppView, AppSettings, ToolCall, SearchMode } from './types';
 import { Sidebar } from './components/Sidebar';
 import { News } from './components/News';
 import { Weather } from './components/Weather';
@@ -14,6 +14,7 @@ import { VoiceOverlay } from './components/VoiceOverlay';
 import { Logo } from './components/Logo';
 import { THEMES } from './animations/themes';
 import { useDeviceTools } from './hooks/useDeviceTools';
+import { Profile } from './components/Profile';
 
 const chunkText = (text: string): string[] => {
   if (!text) return [];
@@ -37,16 +38,41 @@ const chunkText = (text: string): string[] => {
   return chunks.length > 0 ? chunks : [text];
 };
 
+// Simple visual intent detector for Universe mode
+const hasVisualIntent = (q: string): boolean => {
+  const s = q.toLowerCase();
+  return [
+    'şəkil', 'sekil', 'foto', 'fotolar', 'görüntü', 'image', 'images', 'pictures', 'pics',
+    'video', 'videolar', 'youtube', 'clip'
+  ].some(k => s.includes(k));
+};
+
 const App: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const saved = localStorage.getItem('nov-era-chat-history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [isAppReady, setIsAppReady] = useState(false);
   const [activeView, setActiveView] = useState<AppView>('search');
+  const [searchMode, setSearchMode] = useState<SearchMode>(() => {
+    try {
+      const saved = localStorage.getItem('nov-era-search-mode') as SearchMode | null;
+      return saved === 'universe' ? 'universe' : 'base';
+    } catch { return 'base'; }
+  });
   
   const [settings, setSettings] = useState<AppSettings>(() => {
     try {
       const savedSettings = localStorage.getItem('gemini-insight-settings');
-      if (savedSettings) return JSON.parse(savedSettings);
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        return { noveraColor: '#0d0f19', ...parsed };
+      }
     } catch (error) {
       console.error("Could not parse saved settings:", error);
     }
@@ -54,6 +80,7 @@ const App: React.FC = () => {
       voiceEnabled: true,
       voiceId: AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ',
       theme: 'novera',
+      noveraColor: '#0d0f19',
     };
   });
   
@@ -94,6 +121,20 @@ const App: React.FC = () => {
   }, []);
   
   useEffect(() => {
+    try {
+      localStorage.setItem('gemini-insight-settings', JSON.stringify(settings));
+      document.body.className = `theme-${settings.theme} font-sans`;
+    } catch (error) {
+      console.error("Could not save settings:", error);
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    try { localStorage.setItem('nov-era-search-mode', searchMode); } catch {}
+  }, [searchMode]);
+
+  // Initialize Web Audio analyser for visualizations and playback routing
+  useEffect(() => {
     if (audioRef.current && !audioSourceRef.current) {
         try {
             const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -128,15 +169,6 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('gemini-insight-settings', JSON.stringify(settings));
-      document.body.className = `theme-${settings.theme} font-sans`;
-    } catch (error) {
-      console.error("Could not save settings:", error);
-    }
-  }, [settings]);
-
-  useEffect(() => {
     const unlockAudio = () => {
       try {
         if (audioContextRef.current?.state === 'suspended') {
@@ -158,6 +190,12 @@ const App: React.FC = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('nov-era-chat-history', JSON.stringify(messages));
+    } catch {}
+  }, [messages]);
 
   const stopPlayback = useCallback(() => {
       if (audioRef.current) {
@@ -271,84 +309,105 @@ const App: React.FC = () => {
     setMessages(prev => [...prev, userMessage, initialModelMessage]);
 
     try {
+      // Grounded mode: Universe or prefix '?' forces web-grounded answer
+      const explicitGrounded = query.trim().startsWith('?');
+      const groundedQuery = explicitGrounded ? query.trim().slice(1).trim() : query;
+      const isGrounded = (searchMode === 'universe') || explicitGrounded;
+
+      if (isGrounded) {
+        const { text, sources } = await answerWithGroundedSearch(groundedQuery);
+        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, text, sources } : msg));
+        // If visual intent, also fetch visuals via Serper
+        if (hasVisualIntent(groundedQuery)) {
+          const searchResult = await searchImagesAndVideos(groundedQuery, 6, 3);
+          setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
+            ...msg,
+            images: searchResult.images,
+            videos: searchResult.videos,
+          } : msg));
+        }
+        setIsLoading(false);
+        return;
+      }
+
       let fullResponseText = '';
       let accumulatedToolCalls: ToolCall[] = [];
       let sentenceAccumulator = '';
       const sentenceEndRegex = /[.!?…]/;
 
       if (isVocalQuery && settings.voiceEnabled) {
-          currentPlayingMessageIdRef.current = modelMessageId;
-          setPlayingMessageId(modelMessageId);
+        currentPlayingMessageIdRef.current = modelMessageId;
+        setPlayingMessageId(modelMessageId);
       }
 
-      const stream = streamChatQuery(query, history, images);
+      const stream = streamChatQuery(groundedQuery, history, images);
 
       for await (const chunk of stream) {
-          if (chunk.text) {
-              fullResponseText += chunk.text;
-              sentenceAccumulator += chunk.text;
+        if (chunk.text) {
+          fullResponseText += chunk.text;
+          sentenceAccumulator += chunk.text;
 
-              if (isVocalQuery && settings.voiceEnabled) {
-                  let match;
-                  while ((match = sentenceAccumulator.match(sentenceEndRegex))) {
-                      const sentence = sentenceAccumulator.substring(0, match.index! + 1).trim();
-                      if (sentence) {
-                          sentenceQueueRef.current.push(sentence);
-                          if (!isProcessingSentencesRef.current) {
-                              processVocalStream();
-                          }
-                      }
-                      sentenceAccumulator = sentenceAccumulator.substring(match.index! + 1);
-                  }
+          if (isVocalQuery && settings.voiceEnabled) {
+            let match;
+            while ((match = sentenceAccumulator.match(sentenceEndRegex))) {
+              const sentence = sentenceAccumulator.substring(0, match.index! + 1).trim();
+              if (sentence) {
+                sentenceQueueRef.current.push(sentence);
+                if (!isProcessingSentencesRef.current) {
+                  processVocalStream();
+                }
               }
+              sentenceAccumulator = sentenceAccumulator.substring(match.index! + 1);
+            }
           }
+        }
 
-          if (chunk.toolCalls) {
-              const webSearchCalls = chunk.toolCalls.filter(tc => tc.functionCall?.name === 'webSearch');
-              const otherToolParts = chunk.toolCalls.filter(tc => tc.functionCall?.name !== 'webSearch');
+        if (chunk.toolCalls) {
+          const webSearchCalls = chunk.toolCalls.filter(tc => tc.functionCall?.name === 'webSearch');
+          const otherToolParts = chunk.toolCalls.filter(tc => tc.functionCall?.name !== 'webSearch');
 
-              if (webSearchCalls.length > 0) {
-                  for (const call of webSearchCalls) {
-                      const { query, maxImages, maxVideos } = call.functionCall.args;
-                      const searchResult = await searchImagesAndVideos(query, maxImages, maxVideos);
-                      setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
-                          ...msg,
-                          images: [...(msg.images || []), ...searchResult.images],
-                          videos: [...(msg.videos || []), ...searchResult.videos],
-                      } : msg));
-                  }
-              }
-              if (otherToolParts.length > 0) {
-                  const normalizedCalls = otherToolParts
-                    .map(p => ({ name: p.functionCall.name, args: p.functionCall.args }))
-                    .filter(c => c && c.name);
-                  accumulatedToolCalls.push(...normalizedCalls);
-                  await executeToolCalls(normalizedCalls);
-              }
+          if (webSearchCalls.length > 0) {
+            for (const call of webSearchCalls) {
+              const { query, maxImages, maxVideos } = call.functionCall.args;
+              const searchResult = await searchImagesAndVideos(query, maxImages, maxVideos);
+              setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
+                ...msg,
+                images: [...(msg.images || []), ...searchResult.images],
+                videos: [...(msg.videos || []), ...searchResult.videos],
+              } : msg));
+            }
           }
+          if (otherToolParts.length > 0) {
+            const normalizedCalls = otherToolParts
+              .map(p => ({ name: p.functionCall.name, args: p.functionCall.args }))
+              .filter(c => c && c.name);
+            accumulatedToolCalls.push(...normalizedCalls);
+            await executeToolCalls(normalizedCalls);
+          }
+        }
 
-          setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
-              ...msg, text: fullResponseText,
-              sources: [...(msg.sources || []), ...(chunk.sources || [])],
-          } : msg));
+        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
+          ...msg, text: fullResponseText,
+          sources: [...(msg.sources || []), ...(chunk.sources || [])],
+        } : msg));
 
-          if (isVocalQuery) setLiveVocalResponse({ id: modelMessageId, text: fullResponseText });
+        if (isVocalQuery) setLiveVocalResponse({ id: modelMessageId, text: fullResponseText });
       }
 
       // Handle any remaining text in the accumulator
       if (isVocalQuery && settings.voiceEnabled && sentenceAccumulator.trim()) {
-          const leftover = sentenceAccumulator.trim();
-          sentenceQueueRef.current.push(leftover);
-          if (!isProcessingSentencesRef.current) {
-              processVocalStream();
-          }
+        const leftover = sentenceAccumulator.trim();
+        sentenceQueueRef.current.push(leftover);
+        if (!isProcessingSentencesRef.current) {
+          processVocalStream();
+        }
       }
 
       if (accumulatedToolCalls.length > 0) {
-          await executeToolCalls(accumulatedToolCalls);
+        await executeToolCalls(accumulatedToolCalls);
       }
       
-      const relatedQuestions = await generateRelatedQuestions(query, fullResponseText);
+      const relatedQuestions = await generateRelatedQuestions(groundedQuery, fullResponseText);
       setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, related: relatedQuestions } : msg));
       
       // On-demand TTS: Do not auto-generate audio. User must press play button under the message.
@@ -385,11 +444,17 @@ const App: React.FC = () => {
     setScrollOffset(event.currentTarget.scrollTop);
   };
 
+  const clearHistory = useCallback(() => {
+    setMessages([]);
+    try { localStorage.removeItem('nov-era-chat-history'); } catch {}
+  }, []);
+
   const renderView = () => {
     switch (activeView) {
         case 'news': return <News themeColor={activeThemeColor} />;
         case 'weather': return <Weather />;
         case 'translate': return <Translate />;
+        case 'profile': return <Profile />;
         case 'settings': return <Settings settings={settings} onSettingsChange={setSettings} themeColor={activeThemeColor} />;
         case 'search':
         default:
@@ -415,6 +480,9 @@ const App: React.FC = () => {
                             onSend={(q) => handleSend(q)} 
                             isLoading={isLoading} 
                             onVoiceClick={() => setIsVoiceOverlayOpen(true)} 
+                            searchMode={searchMode}
+                            onChangeMode={setSearchMode}
+                            onClearHistory={clearHistory}
                         />
                         <p className="text-center text-xs text-text-sub pb-3">
                         NovEra səhv edə bilər. Vacib məlumatları yoxlamağınız tövsiyə olunur.
@@ -430,7 +498,13 @@ const App: React.FC = () => {
 
   return (
     <div className={`flex h-screen bg-transparent text-text-main transition-opacity duration-500 ${isAppReady ? 'opacity-100' : 'opacity-0'}`}>
-      {ActiveAnimation && <ActiveAnimation scrollOffset={scrollOffset} analyserNode={analyserRef.current} />}
+      {ActiveAnimation && (
+        <ActiveAnimation
+          scrollOffset={scrollOffset}
+          analyserNode={analyserRef.current}
+          customColor={settings.theme === 'novera' ? (settings.noveraColor || '#0d0f19') : undefined}
+        />
+      )}
       <Sidebar activeView={activeView} setActiveView={setActiveView} themeColor={activeThemeColor} />
       <div className="flex-1 flex flex-col overflow-y-hidden">
         {renderView()}

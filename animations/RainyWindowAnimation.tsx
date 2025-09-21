@@ -1,16 +1,20 @@
 import React from 'react';
 import type { ThemeAnimationProps } from './themes';
 
-interface Star {
+interface Drop {
     x: number;
     y: number;
-    z: number;
+    len: number;
+    speed: number;
+    alpha: number;
 }
 
 export const RainyWindowAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode }) => {
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
-    const stars = React.useRef<Star[]>([]).current;
-    const mousePos = React.useRef({ x: 0, y: 0 }).current;
+    const drops = React.useRef<Drop[]>([]).current;
+    // Flash overlay disabled by design
+    const enableFlash = false;
+    const flash = React.useRef(0);
 
     React.useEffect(() => {
         const canvas = canvasRef.current;
@@ -21,24 +25,21 @@ export const RainyWindowAnimation: React.FC<ThemeAnimationProps> = ({ analyserNo
         const resizeCanvas = () => {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
-            if (stars.length === 0) {
-                for (let i = 0; i < 800; i++) {
-                    stars.push({
-                        x: (Math.random() - 0.5) * canvas.width * 2,
-                        y: (Math.random() - 0.5) * canvas.height * 2,
-                        z: Math.random() * canvas.width,
+            if (drops.length === 0) {
+                const count = Math.max(350, Math.floor((canvas.width * canvas.height) / 8000));
+                for (let i = 0; i < count; i++) {
+                    drops.push({
+                        x: Math.random() * canvas.width,
+                        y: Math.random() * canvas.height,
+                        len: 8 + Math.random() * 18,
+                        speed: 3 + Math.random() * 5,
+                        alpha: 0.15 + Math.random() * 0.35,
                     });
                 }
             }
         };
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
-
-        const handleMouseMove = (e: MouseEvent) => {
-            mousePos.x = e.clientX - canvas.width / 2;
-            mousePos.y = e.clientY - canvas.height / 2;
-        };
-        window.addEventListener('mousemove', handleMouseMove);
 
         let animationFrameId: number;
 
@@ -47,51 +48,56 @@ export const RainyWindowAnimation: React.FC<ThemeAnimationProps> = ({ analyserNo
             if (analyserNode) {
                 const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
                 analyserNode.getByteFrequencyData(dataArray);
-                const sum = dataArray.reduce((a, b) => a + b, 0);
-                audioLevel = sum / (dataArray.length * 255);
+                const sum = dataArray.slice(0, 32).reduce((a, b) => a + b, 0);
+                audioLevel = sum / (32 * 255);
             }
 
-            const speed = 2 + audioLevel * 15;
-
-            ctx.fillStyle = 'rgba(13, 15, 25, 0.2)';
+            // Background glass tint
+            const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            grad.addColorStop(0, '#0d0f19');
+            grad.addColorStop(1, '#111827');
+            ctx.fillStyle = grad;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.save();
-            ctx.translate(canvas.width / 2, canvas.height / 2);
 
-            stars.forEach(star => {
-                star.z -= speed;
-                if (star.z <= 0) {
-                    star.x = (Math.random() - 0.5) * canvas.width * 2;
-                    star.y = (Math.random() - 0.5) * canvas.height * 2;
-                    star.z = canvas.width;
-                }
+            // Slight vignette
+            const vignette = ctx.createRadialGradient(
+                canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) / 3,
+                canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) / 1.1
+            );
+            vignette.addColorStop(0, 'rgba(0,0,0,0)');
+            vignette.addColorStop(1, 'rgba(0,0,0,0.35)');
+            ctx.fillStyle = vignette;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-                const k = 128 / star.z;
-                const px = star.x * k - mousePos.x * 0.1;
-                const py = star.y * k - mousePos.y * 0.1;
-
-                const size = (1 - star.z / canvas.width) * 5;
-                const shade = (1 - star.z / canvas.width) * 255;
-
+            // Rain layer
+            ctx.strokeStyle = 'rgba(200, 220, 255, 0.35)';
+            ctx.lineWidth = 1;
+            const boost = 1 + audioLevel * 2;
+            for (let i = 0; i < drops.length; i++) {
+                const d = drops[i];
+                ctx.globalAlpha = d.alpha;
                 ctx.beginPath();
-                ctx.moveTo(px, py);
-                ctx.lineTo(px + (star.x * k * speed * 0.05), py + (star.y * k * speed * 0.05));
-                ctx.lineWidth = size;
-                ctx.strokeStyle = `rgb(${shade}, ${shade}, 255)`;
+                ctx.moveTo(d.x, d.y);
+                ctx.lineTo(d.x + 0.8, d.y + d.len);
                 ctx.stroke();
-            });
+                d.y += d.speed * boost;
+                d.x += 0.25; // slight wind
+                if (d.y > canvas.height) { d.y = -10; d.x = Math.random() * canvas.width; }
+                if (d.x > canvas.width + 10) d.x = -10;
+            }
+            ctx.globalAlpha = 1;
 
-            ctx.restore();
+            // No white blur flash overlay in rain theme (disabled)
+
             animationFrameId = requestAnimationFrame(animate);
         };
         animate();
 
         return () => {
             window.removeEventListener('resize', resizeCanvas);
-            window.removeEventListener('mousemove', handleMouseMove);
             cancelAnimationFrame(animationFrameId);
         };
-    }, [analyserNode, stars, mousePos]);
+    }, [analyserNode, drops]);
 
-    return <canvas ref={canvasRef} className="fixed top-0 left-0 w-full h-full -z-10 bg-[#0d0f19]" />;
+    return <canvas ref={canvasRef} className="fixed top-0 left-0 w-full h-full -z-10" />;
 };

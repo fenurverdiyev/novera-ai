@@ -16,6 +16,7 @@ interface Cloud {
     size: number;
     speed: number;
     opacity: number;
+    depth: number; // 0.5..1 for parallax strength and scaling
 }
 
 interface Particle {
@@ -37,6 +38,28 @@ interface Bird {
     size: number;
 }
 
+interface Palm {
+    x: number;
+    baseY: number;
+    height: number;
+    lean: number;
+    swayAmp: number;
+    swaySpeed: number;
+    depth: number;
+}
+
+interface Flora {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    size: number;
+    hue: number;
+    life: number;
+    maxLife: number;
+    depth: number;
+}
+
 export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode }) => {
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
     const waves = React.useRef<Wave[]>([]).current;
@@ -44,12 +67,20 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
     const particles = React.useRef<Particle[]>([]).current;
     const time = React.useRef(0);
     const birds = React.useRef<Bird[]>([]).current;
+    const mouse = React.useRef({ x: typeof window !== 'undefined' ? window.innerWidth / 2 : 0, y: typeof window !== 'undefined' ? window.innerHeight / 2 : 0 });
+    const palms = React.useRef<Palm[]>([]).current;
+    const flora = React.useRef<Flora[]>([]).current;
 
     React.useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
+
+        const onMouseMove = (e: MouseEvent) => {
+            mouse.current.x = e.clientX;
+            mouse.current.y = e.clientY;
+        };
 
         const resizeCanvas = () => {
             canvas.width = window.innerWidth;
@@ -70,12 +101,14 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
             
             if (clouds.length === 0) {
                 for (let i = 0; i < 6; i++) {
+                    const depth = 0.5 + Math.random() * 0.5;
                     clouds.push({
                         x: Math.random() * canvas.width,
-                        y: Math.random() * canvas.height * 0.4,
-                        size: Math.random() * 80 + 40,
-                        speed: Math.random() * 0.5 + 0.2,
-                        opacity: Math.random() * 0.4 + 0.3,
+                        y: Math.random() * canvas.height * 0.35,
+                        size: (Math.random() * 80 + 40) * depth,
+                        speed: (Math.random() * 0.5 + 0.2) * depth,
+                        opacity: Math.random() * 0.35 + 0.25,
+                        depth,
                     });
                 }
             }
@@ -92,11 +125,74 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                     });
                 }
             }
+
+            // Palms near shoreline
+            if (palms.length === 0) {
+                const sandHeight = Math.max(60, canvas.height * 0.12);
+                const baseY = canvas.height - sandHeight + 6;
+                const count = Math.max(3, Math.floor(canvas.width / 420));
+                for (let i = 0; i < count; i++) {
+                    const depth = 0.6 + Math.random() * 0.4;
+                    palms.push({
+                        x: canvas.width * (0.08 + Math.random() * 0.84),
+                        baseY,
+                        height: (120 + Math.random() * 100) * depth,
+                        lean: (Math.random() * 40 - 20) * depth,
+                        swayAmp: 0.15 + Math.random() * 0.25,
+                        swaySpeed: 0.4 + Math.random() * 0.4,
+                        depth,
+                    });
+                }
+            }
         };
         window.addEventListener('resize', resizeCanvas);
+        window.addEventListener('mousemove', onMouseMove);
         resizeCanvas();
 
         let animationFrameId: number;
+
+        // Draw swaying palm silhouette with simple gradient
+        const drawPalm = (p: Palm) => {
+            const sway = Math.sin(time.current * p.swaySpeed + p.x * 0.002) * p.swayAmp;
+            const parallaxX = (mouse.current.x - canvas.width / 2) * 0.015 * (p.depth - 0.5);
+            const parallaxY = (mouse.current.y - canvas.height / 2) * 0.01 * (p.depth - 0.5);
+            const baseX = p.x + parallaxX;
+            const baseY = p.baseY + parallaxY;
+            const topX = baseX + p.lean + sway * 20;
+            const topY = baseY - p.height;
+
+            const ctrlX = baseX + (p.lean * 0.6) + sway * 14;
+            const ctrlY = baseY - p.height * 0.6;
+            const width = Math.max(2, 6 * p.depth);
+            const trunkGradient = ctx.createLinearGradient(baseX, baseY, topX, topY);
+            trunkGradient.addColorStop(0, 'rgba(70,40,20,0.9)');
+            trunkGradient.addColorStop(1, 'rgba(120,80,40,0.75)');
+
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.strokeStyle = trunkGradient;
+            ctx.lineWidth = width;
+            ctx.beginPath();
+            ctx.moveTo(baseX, baseY);
+            ctx.quadraticCurveTo(ctrlX, ctrlY, topX, topY);
+            ctx.stroke();
+
+            const leafCount = 6;
+            for (let i = 0; i < leafCount; i++) {
+                const a = (-Math.PI / 2) + (i - (leafCount - 1) / 2) * 0.35 + sway * 0.5;
+                const len = 40 + p.height * 0.25;
+                const tipX = topX + Math.cos(a) * len;
+                const tipY = topY + Math.sin(a) * len;
+                ctx.strokeStyle = `rgba(80, 200, 120, ${0.65 * p.depth})`;
+                ctx.lineWidth = Math.max(1, 2.5 * p.depth);
+                ctx.beginPath();
+                ctx.moveTo(topX, topY);
+                ctx.quadraticCurveTo(topX + Math.cos(a) * len * 0.4, topY + Math.sin(a) * len * 0.4, tipX, tipY);
+                ctx.stroke();
+            }
+            ctx.restore();
+        };
 
         const createParticle = (x: number, y: number) => {
             particles.push({
@@ -124,23 +220,63 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
 
             // Sky gradient
             const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-            skyGradient.addColorStop(0, '#87ceeb');
-            skyGradient.addColorStop(0.3, '#b0e0e6');
-            skyGradient.addColorStop(0.6, '#40e0d0');
-            skyGradient.addColorStop(0.8, '#20b2aa');
-            skyGradient.addColorStop(1, '#008b8b');
+            const skyIntensity = 1 + audioLevel * 0.3;
+            skyGradient.addColorStop(0, `hsl(200, 100%, ${Math.min(95, 85 * skyIntensity)}%)`);
+            skyGradient.addColorStop(0.25, `hsl(210, 100%, ${Math.min(85, 75 * skyIntensity)}%)`);
+            skyGradient.addColorStop(0.5, `hsl(200, 100%, ${Math.min(75, 65 * skyIntensity)}%)`);
+            skyGradient.addColorStop(0.75, `hsl(205, 100%, ${Math.min(65, 55 * skyIntensity)}%)`);
+            skyGradient.addColorStop(1, `hsl(210, 100%, ${Math.min(55, 45 * skyIntensity)}%)`);
             ctx.fillStyle = skyGradient;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Horizon haze near waterline
+            {
+                ctx.save();
+                const haze = ctx.createLinearGradient(0, canvas.height * 0.45, 0, canvas.height * 0.8);
+                haze.addColorStop(0, 'rgba(255,255,255,0)');
+                haze.addColorStop(0.6, 'rgba(255,255,255,0.06)');
+                haze.addColorStop(1, 'rgba(255,220,180,0.10)');
+                ctx.fillStyle = haze;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.restore();
+            }
 
             // Sun
             const sunX = canvas.width * 0.85;
             const sunY = canvas.height * 0.15;
-            const sunRadius = 50 + audioLevel * 20;
+            const sunRadius = 50 + audioLevel * 30;
+
+            // Sun rays (audio-reactive)
+            if (audioLevel > 0.1) {
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                const rayCount = 12;
+                const rayLength = sunRadius * (2 + audioLevel * 2);
+                for (let i = 0; i < rayCount; i++) {
+                    const angle = (i / rayCount) * Math.PI * 2 + time.current * 0.5;
+                    const x1 = sunX + Math.cos(angle) * sunRadius * 1.2;
+                    const y1 = sunY + Math.sin(angle) * sunRadius * 1.2;
+                    const x2 = sunX + Math.cos(angle) * rayLength;
+                    const y2 = sunY + Math.sin(angle) * rayLength;
+                    
+                    const rayGradient = ctx.createLinearGradient(x1, y1, x2, y2);
+                    rayGradient.addColorStop(0, `rgba(255, 255, 100, ${audioLevel * 0.6})`);
+                    rayGradient.addColorStop(1, 'rgba(255, 255, 100, 0)');
+                    
+                    ctx.strokeStyle = rayGradient;
+                    ctx.lineWidth = 2 + audioLevel * 3;
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
 
             // Sun glow
             const sunGlow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunRadius * 3);
-            sunGlow.addColorStop(0, 'rgba(255, 255, 100, 0.8)');
-            sunGlow.addColorStop(0.3, 'rgba(255, 200, 0, 0.4)');
+            sunGlow.addColorStop(0, `rgba(255, 255, 100, ${0.8 + audioLevel * 0.3})`);
+            sunGlow.addColorStop(0.3, `rgba(255, 200, 0, ${0.4 + audioLevel * 0.2})`);
             sunGlow.addColorStop(1, 'rgba(255, 150, 0, 0)');
             ctx.fillStyle = sunGlow;
             ctx.beginPath();
@@ -149,13 +285,71 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
 
             // Sun body
             const sunBody = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunRadius);
-            sunBody.addColorStop(0, '#ffff99');
-            sunBody.addColorStop(0.7, '#ffcc00');
-            sunBody.addColorStop(1, '#ff9900');
+            sunBody.addColorStop(0, `hsl(60, 100%, ${Math.min(95, 85 + audioLevel * 15)}%)`);
+            sunBody.addColorStop(0.7, `hsl(50, 100%, ${Math.min(85, 75 + audioLevel * 15)}%)`);
+            sunBody.addColorStop(1, `hsl(40, 100%, ${Math.min(75, 65 + audioLevel * 15)}%)`);
             ctx.fillStyle = sunBody;
             ctx.beginPath();
             ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
             ctx.fill();
+
+            // Sun limb darkening for realism
+            {
+                ctx.save();
+                ctx.globalCompositeOperation = 'multiply';
+                const limb = ctx.createRadialGradient(sunX, sunY, sunRadius * 0.6, sunX, sunY, sunRadius);
+                limb.addColorStop(0, 'rgba(0,0,0,0)');
+                limb.addColorStop(0.75, 'rgba(0,0,0,0.05)');
+                limb.addColorStop(1, 'rgba(0,0,0,0.12)');
+                ctx.fillStyle = limb;
+                ctx.beginPath();
+                ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            // Lens flare along vector to screen center (enhanced)
+            {
+                const toCenterX = canvas.width * 0.5;
+                const toCenterY = canvas.height * 0.5;
+                const dx = toCenterX - sunX;
+                const dy = toCenterY - sunY;
+                const steps = 5;
+                ctx.save();
+                ctx.globalCompositeOperation = 'screen';
+                for (let i = 1; i <= steps; i++) {
+                    const t = i / (steps + 1);
+                    const fx = sunX + dx * t;
+                    const fy = sunY + dy * t;
+                    const r = sunRadius * (0.3 + (steps - i) * 0.2) * (1 + audioLevel * 0.5);
+                    const flareGradient = ctx.createRadialGradient(fx, fy, 0, fx, fy, r);
+                    const alpha = (0.3 * (1 - t) + audioLevel * 0.3) * (1 + Math.sin(time.current * 2 + i) * 0.2);
+                    flareGradient.addColorStop(0, `rgba(255,255,200,${alpha})`);
+                    flareGradient.addColorStop(0.5, `rgba(255,220,150,${alpha * 0.7})`);
+                    flareGradient.addColorStop(1, 'rgba(255,200,100,0)');
+                    ctx.fillStyle = flareGradient;
+                    ctx.beginPath();
+                    ctx.arc(fx, fy, r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.restore();
+            }
+
+            // Enhanced sun corona effect
+            if (audioLevel > 0.2) {
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                const coronaRadius = sunRadius * (2.5 + audioLevel * 1.5);
+                const coronaGradient = ctx.createRadialGradient(sunX, sunY, sunRadius, sunX, sunY, coronaRadius);
+                coronaGradient.addColorStop(0, `rgba(255, 255, 150, ${audioLevel * 0.4})`);
+                coronaGradient.addColorStop(0.5, `rgba(255, 200, 100, ${audioLevel * 0.2})`);
+                coronaGradient.addColorStop(1, 'rgba(255, 150, 50, 0)');
+                ctx.fillStyle = coronaGradient;
+                ctx.beginPath();
+                ctx.arc(sunX, sunY, coronaRadius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
 
             // Birds (simple V-shape)
             birds.forEach(b => {
@@ -175,20 +369,25 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                 ctx.stroke();
             });
 
-            // Update and draw clouds
+            // Update and draw clouds (with parallax)
             clouds.forEach(cloud => {
                 cloud.x += cloud.speed;
                 if (cloud.x > canvas.width + cloud.size) {
                     cloud.x = -cloud.size;
                 }
 
+                const parallaxX = (mouse.current.x - canvas.width / 2) * 0.02 * (cloud.depth - 0.5);
+                const parallaxY = (mouse.current.y - canvas.height / 2) * 0.01 * (cloud.depth - 0.5);
+                const cx = cloud.x + parallaxX;
+                const cy = cloud.y + parallaxY;
+
                 // Cloud shadow
                 ctx.fillStyle = `rgba(200, 200, 200, ${cloud.opacity * 0.3})`;
                 for (let i = 0; i < 5; i++) {
                     ctx.beginPath();
                     ctx.arc(
-                        cloud.x + i * cloud.size * 0.3 + 2,
-                        cloud.y + i * cloud.size * 0.1 + 2,
+                        cx + i * cloud.size * 0.3 + 2,
+                        cy + i * cloud.size * 0.1 + 2,
                         cloud.size * (0.3 + i * 0.1),
                         0, Math.PI * 2
                     );
@@ -200,14 +399,17 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                 for (let i = 0; i < 5; i++) {
                     ctx.beginPath();
                     ctx.arc(
-                        cloud.x + i * cloud.size * 0.3,
-                        cloud.y + i * cloud.size * 0.1,
+                        cx + i * cloud.size * 0.3,
+                        cy + i * cloud.size * 0.1,
                         cloud.size * (0.3 + i * 0.1),
                         0, Math.PI * 2
                     );
                     ctx.fill();
                 }
             });
+
+            // Palms (draw after clouds, before waves)
+            palms.forEach(drawPalm);
 
             // Create sparkles
             if (Math.random() < 0.1 + audioLevel * 0.3) {
@@ -219,15 +421,16 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
 
             // Update and draw waves
             waves.forEach((wave, index) => {
-                wave.phase += wave.speed + audioLevel * 0.01;
+                wave.phase += wave.speed + audioLevel * 0.02;
                 
                 ctx.beginPath();
                 ctx.moveTo(0, wave.y);
 
                 for (let x = 0; x <= canvas.width; x += 6) {
+                    const par = Math.sin((x * 0.004) + time.current * (0.4 + index * 0.1)) * (index * 2 + audioLevel * 3);
                     const waveHeight = Math.sin(x * wave.frequency + wave.phase) * 
-                                     (wave.amplitude + audioLevel * 30);
-                    const y = wave.y + waveHeight;
+                                     (wave.amplitude + audioLevel * 40);
+                    const y = wave.y + waveHeight + par;
                     ctx.lineTo(x, y);
                 }
 
@@ -235,11 +438,11 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                 ctx.lineTo(0, canvas.height);
                 ctx.closePath();
 
-                const alpha = 0.6 - index * 0.1;
+                const alpha = (0.6 - index * 0.1) + audioLevel * 0.2;
                 const waveGradient = ctx.createLinearGradient(0, wave.y - 50, 0, canvas.height);
-                waveGradient.addColorStop(0, `rgba(64, 224, 208, ${alpha})`);
-                waveGradient.addColorStop(0.5, `rgba(32, 178, 170, ${alpha})`);
-                waveGradient.addColorStop(1, `rgba(0, 139, 139, ${alpha})`);
+                waveGradient.addColorStop(0, `hsla(175, 75%, ${70 + audioLevel * 10}%, ${alpha})`);
+                waveGradient.addColorStop(0.5, `hsla(175, 65%, ${60 + audioLevel * 10}%, ${alpha})`);
+                waveGradient.addColorStop(1, `hsla(175, 55%, ${50 + audioLevel * 10}%, ${alpha})`);
                 ctx.fillStyle = waveGradient;
                 ctx.fill();
 
@@ -247,23 +450,100 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                 ctx.beginPath();
                 ctx.moveTo(0, wave.y);
                 for (let x = 0; x <= canvas.width; x += 6) {
+                    const par = Math.sin((x * 0.004) + time.current * (0.4 + index * 0.1)) * (index * 2 + audioLevel * 3);
                     const waveHeight = Math.sin(x * wave.frequency + wave.phase) * 
-                                     (wave.amplitude + audioLevel * 30);
-                    const y = wave.y + waveHeight;
+                                     (wave.amplitude + audioLevel * 40);
+                    const y = wave.y + waveHeight + par;
                     ctx.lineTo(x, y);
                 }
-                ctx.strokeStyle = `rgba(255, 255, 255, ${0.8 + audioLevel * 0.2})`;
-                ctx.lineWidth = 2;
+                ctx.strokeStyle = `rgba(255, 255, 255, ${0.8 + audioLevel * 0.3})`;
+                ctx.lineWidth = 2 + audioLevel * 2;
                 ctx.stroke();
+
+                // Specular highlights along crests
+                if (audioLevel > 0.05) {
+                    ctx.save();
+                    ctx.globalCompositeOperation = 'lighter';
+                    for (let gx = 30; gx < canvas.width; gx += 120) {
+                        const x = gx + ((time.current * 20 + index * 15) % 40) - 20;
+                        const par = Math.sin((x * 0.004) + time.current * (0.4 + index * 0.1)) * (index * 2 + audioLevel * 3);
+                        const waveHeight = Math.sin(x * wave.frequency + wave.phase) * (wave.amplitude + audioLevel * 40);
+                        const y = wave.y + waveHeight + par;
+                        ctx.strokeStyle = `rgba(255, 255, 220, ${0.25 + audioLevel * 0.25})`;
+                        ctx.lineWidth = 1 + audioLevel * 1.5;
+                        ctx.beginPath();
+                        ctx.moveTo(x - 6, y);
+                        ctx.lineTo(x + 6, y);
+                        ctx.stroke();
+                    }
+                    ctx.restore();
+                }
             });
 
-            // Sandy shoreline at bottom
-            const sandHeight = Math.max(60, canvas.height * 0.12);
-            const sandGradient = ctx.createLinearGradient(0, canvas.height - sandHeight, 0, canvas.height);
-            sandGradient.addColorStop(0, 'rgba(238, 214, 175, 0.85)');
-            sandGradient.addColorStop(1, 'rgba(210, 180, 140, 0.95)');
-            ctx.fillStyle = sandGradient;
-            ctx.fillRect(0, canvas.height - sandHeight, canvas.width, sandHeight);
+            // Sun reflection glint on water
+            {
+                ctx.save();
+                ctx.globalCompositeOperation = 'screen';
+                const sigma = Math.max(40, canvas.width * 0.08);
+                for (let x = 0; x <= canvas.width; x += 4) {
+                    const dx = x - sunX;
+                    const weight = Math.exp(-(dx * dx) / (2 * sigma * sigma));
+                    if (weight < 0.02) continue;
+                    let yRef = 0; let set = false;
+                    for (let index = 0; index < waves.length; index++) {
+                        const w = waves[index];
+                        const par = Math.sin((x * 0.004) + time.current * (0.4 + index * 0.1)) * (index * 2 + audioLevel * 3);
+                        const waveHeight = Math.sin(x * w.frequency + w.phase) * (w.amplitude + audioLevel * 40);
+                        const y = w.y + waveHeight + par;
+                        if (!set || y < yRef) { yRef = y; set = true; }
+                    }
+                    const len = 6 + weight * 28 + audioLevel * 20;
+                    const alpha = 0.07 + weight * 0.35 + audioLevel * 0.18;
+                    ctx.strokeStyle = `rgba(255, 245, 200, ${alpha})`;
+                    ctx.lineWidth = 1 + Math.min(3, 0.5 + weight * 3 + audioLevel * 1.5);
+                    ctx.beginPath();
+                    ctx.moveTo(x, yRef - len * 0.25);
+                    ctx.lineTo(x, yRef + len * 0.75);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
+            // Tropical flora particles (gentle floating petals)
+            if (Math.random() < 0.06 + audioLevel * 0.08) {
+                const depth = 0.6 + Math.random() * 0.4;
+                flora.push({
+                    x: Math.random() * canvas.width,
+                    y: canvas.height * (0.55 + Math.random() * 0.35),
+                    vx: (Math.random() - 0.5) * 0.6,
+                    vy: -0.2 - Math.random() * 0.4,
+                    size: 2 + Math.random() * 3,
+                    hue: [330, 350, 20, 300][Math.floor(Math.random() * 4)],
+                    life: 120,
+                    maxLife: 120,
+                    depth,
+                });
+            }
+            for (let i = flora.length - 1; i >= 0; i--) {
+                const f = flora[i];
+                f.x += f.vx;
+                f.y += f.vy;
+                f.vx += Math.sin(time.current * 0.1 + i) * 0.002;
+                f.life--;
+                if (f.life <= 0) { flora.splice(i, 1); continue; }
+                const alpha = (f.life / f.maxLife) * (0.5 + 0.5 * f.depth);
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                const grad = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.size * 2.2);
+                grad.addColorStop(0, `hsla(${f.hue}, 90%, 70%, ${alpha})`);
+                grad.addColorStop(1, `hsla(${f.hue}, 90%, 70%, 0)`);
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(f.x, f.y, f.size * (1 + audioLevel * 0.4), 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+            if (flora.length > 80) flora.splice(0, flora.length - 80);
 
             // Update and draw sparkles
             for (let i = particles.length - 1; i >= 0; i--) {
@@ -308,9 +588,10 @@ export const SummerAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
 
         return () => {
             window.removeEventListener('resize', resizeCanvas);
+            window.removeEventListener('mousemove', onMouseMove);
             cancelAnimationFrame(animationFrameId);
         };
-    }, [analyserNode, waves, clouds, particles, time]);
+    }, [analyserNode, waves, clouds, particles, time, palms, flora]);
 
     return <canvas ref={canvasRef} className="fixed top-0 left-0 w-full h-full -z-10" />;
 };

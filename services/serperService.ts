@@ -89,19 +89,68 @@ export interface SerperResponse {
 }
 
 /**
+ * Simple URL safety filter to exclude NSFW or dangerous content.
+ */
+const BLOCKED_PATTERNS = [/porn/i, /xxx/i, /adult/i, /sex/i, /gambling/i, /malware/i, /phishing/i];
+function isSafeUrl(url: string): boolean {
+    try {
+        const u = new URL(url);
+        const host = u.hostname;
+        return !BLOCKED_PATTERNS.some((p) => p.test(url) || p.test(host));
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Detects locale for Serper: hl (language) and gl (country).
+ * Fallbacks: hl='en', gl='us'.
+ */
+export function detectLocaleForSearch(): { hl: string; gl: string } {
+    let hl = 'en';
+    let gl = 'us';
+    try {
+        if (typeof navigator !== 'undefined') {
+            const navLang = navigator.language || (navigator as any).userLanguage || 'en-US';
+            const [langPart, regionPart] = navLang.split('-');
+            const lang = (langPart || 'en').toLowerCase();
+            const region = (regionPart || 'US').toLowerCase();
+            if (['az', 'tr', 'ru', 'en'].includes(lang)) {
+                hl = lang;
+            }
+            // Prefer region when present; otherwise map by language
+            if (region) {
+                gl = region;
+            }
+            if (lang === 'az') gl = 'az';
+            if (lang === 'tr') gl = 'tr';
+            if (lang === 'ru') gl = 'ru';
+        }
+    } catch {}
+    return { hl, gl };
+}
+
+/**
  * Search for web results using Serper API
  * @param query Search query
  * @param num Number of results to return (default: 10)
+ * @param opts Optional locale options
  * @returns Promise<SerperResponse | null>
  */
-export async function searchWeb(query: string, num: number = 10): Promise<SerperResponse | null> {
+export async function searchWeb(query: string, num: number = 10, opts?: { gl?: string; hl?: string }): Promise<SerperResponse | null> {
     if (!query || query.trim().length === 0) {
         return null;
     }
 
     try {
-        const viaProxy = await callSerperProxy<SerperResponse>('search', { q: query.trim(), num });
-        if (viaProxy) return viaProxy;
+        const viaProxy = await callSerperProxy<SerperResponse>('search', { q: query.trim(), num, gl: opts?.gl, hl: opts?.hl });
+        if (viaProxy) {
+            // Apply safety filter to organic results
+            if (viaProxy.organic) {
+                viaProxy.organic = viaProxy.organic.filter((r) => isSafeUrl(r.link));
+            }
+            return viaProxy;
+        }
 
         if (!CLIENT_SERPER_API_KEY) return null;
         const response = await fetch(`${SERPER_BASE_URL}/search`, {
@@ -113,6 +162,8 @@ export async function searchWeb(query: string, num: number = 10): Promise<Serper
             body: JSON.stringify({
                 q: query.trim(),
                 num: Math.min(num, 100), // Serper API limit
+                ...(opts?.gl ? { gl: opts.gl } : {}),
+                ...(opts?.hl ? { hl: opts.hl } : {}),
             }),
         });
 
@@ -123,6 +174,10 @@ export async function searchWeb(query: string, num: number = 10): Promise<Serper
         }
 
         const data = await response.json();
+        // Safety filter
+        if (data.organic) {
+            data.organic = (data.organic as any[]).filter((r: any) => isSafeUrl(r.link));
+        }
         return data as SerperResponse;
     } catch (error) {
         console.error('Error in searchWeb:', error);
@@ -134,16 +189,20 @@ export async function searchWeb(query: string, num: number = 10): Promise<Serper
  * Search for images using Serper API
  * @param query Search query
  * @param num Number of images to return (default: 10)
+ * @param opts Optional locale options
  * @returns Promise<SerperImageResult[] | null>
  */
-export async function searchImages(query: string, num: number = 10): Promise<SerperImageResult[] | null> {
+export async function searchImages(query: string, num: number = 10, opts?: { gl?: string; hl?: string }): Promise<SerperImageResult[] | null> {
     if (!query || query.trim().length === 0) {
         return null;
     }
 
     try {
-        const viaProxy = await callSerperProxy<any>('images', { q: query.trim(), num });
-        if (viaProxy && viaProxy.images) return viaProxy.images as SerperImageResult[];
+        const viaProxy = await callSerperProxy<any>('images', { q: query.trim(), num, gl: opts?.gl, hl: opts?.hl });
+        if (viaProxy && viaProxy.images) {
+            const arr = (viaProxy.images as SerperImageResult[]).filter((img) => isSafeUrl(img.imageUrl) && (!img.link || isSafeUrl(img.link)));
+            return arr;
+        }
 
         if (!CLIENT_SERPER_API_KEY) return null;
         const response = await fetch(`${SERPER_BASE_URL}/images`, {
@@ -155,6 +214,8 @@ export async function searchImages(query: string, num: number = 10): Promise<Ser
             body: JSON.stringify({
                 q: query.trim(),
                 num: Math.min(num, 100),
+                ...(opts?.gl ? { gl: opts.gl } : {}),
+                ...(opts?.hl ? { hl: opts.hl } : {}),
             }),
         });
 
@@ -165,7 +226,8 @@ export async function searchImages(query: string, num: number = 10): Promise<Ser
         }
 
         const data = await response.json();
-        return data.images || [];
+        const images = (data.images || []) as SerperImageResult[];
+        return images.filter((img) => isSafeUrl(img.imageUrl) && (!img.link || isSafeUrl(img.link)));
     } catch (error) {
         console.error('Error in searchImages:', error);
         return null;
@@ -176,16 +238,20 @@ export async function searchImages(query: string, num: number = 10): Promise<Ser
  * Search for videos using Serper API
  * @param query Search query
  * @param num Number of videos to return (default: 10)
+ * @param opts Optional locale options
  * @returns Promise<SerperVideoResult[] | null>
  */
-export async function searchVideos(query: string, num: number = 10): Promise<SerperVideoResult[] | null> {
+export async function searchVideos(query: string, num: number = 10, opts?: { gl?: string; hl?: string }): Promise<SerperVideoResult[] | null> {
     if (!query || query.trim().length === 0) {
         return null;
     }
 
     try {
-        const viaProxy = await callSerperProxy<any>('videos', { q: query.trim(), num });
-        if (viaProxy && viaProxy.videos) return viaProxy.videos as SerperVideoResult[];
+        const viaProxy = await callSerperProxy<any>('videos', { q: query.trim(), num, gl: opts?.gl, hl: opts?.hl });
+        if (viaProxy && viaProxy.videos) {
+            const arr = (viaProxy.videos as SerperVideoResult[]).filter((vid) => isSafeUrl(vid.link));
+            return arr;
+        }
 
         if (!CLIENT_SERPER_API_KEY) return null;
         const response = await fetch(`${SERPER_BASE_URL}/videos`, {
@@ -197,6 +263,8 @@ export async function searchVideos(query: string, num: number = 10): Promise<Ser
             body: JSON.stringify({
                 q: query.trim(),
                 num: Math.min(num, 100),
+                ...(opts?.gl ? { gl: opts.gl } : {}),
+                ...(opts?.hl ? { hl: opts.hl } : {}),
             }),
         });
 
@@ -207,7 +275,8 @@ export async function searchVideos(query: string, num: number = 10): Promise<Ser
         }
 
         const data = await response.json();
-        return data.videos || [];
+        const videos = (data.videos || []) as SerperVideoResult[];
+        return videos.filter((vid) => isSafeUrl(vid.link));
     } catch (error) {
         console.error('Error in searchVideos:', error);
         return null;
@@ -262,7 +331,7 @@ export async function searchNews(query: string, num: number = 10, opts?: { gl?: 
                 imageUrl: n.imageUrl,
                 position: n.position ?? idx + 1,
             }));
-            return normalized;
+            return normalized.filter((n) => isSafeUrl(n.link));
         }
 
         if (!CLIENT_SERPER_API_KEY) return null;
@@ -297,7 +366,7 @@ export async function searchNews(query: string, num: number = 10, opts?: { gl?: 
             imageUrl: n.imageUrl,
             position: n.position ?? idx + 1,
         }));
-        return normalized;
+        return normalized.filter((n) => isSafeUrl(n.link));
     } catch (error) {
         console.error('Error in searchNews:', error);
         return null;
