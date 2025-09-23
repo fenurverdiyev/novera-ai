@@ -16,6 +16,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
   const [showUploadMenu, setShowUploadMenu] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [activeIndex, setActiveIndex] = useState<number>(-1);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -31,12 +32,15 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
     const q = query.trim();
     if (q.length < 2) {
       setSuggestions([]);
+      setActiveIndex(-1);
       return;
     }
     const { hl, gl } = detectLocaleForSearch();
     debounceRef.current = window.setTimeout(async () => {
       const res = await suggestAutocomplete(q, { hl, gl });
-      setSuggestions(res.slice(0, 8));
+      const items = res.slice(0, 8);
+      setSuggestions(items);
+      setActiveIndex(items.length ? 0 : -1);
     }, 220);
     return () => {
       if (debounceRef.current) {
@@ -54,9 +58,41 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown' && suggestions.length > 0) {
+      e.preventDefault();
+      setActiveIndex((prev) => (prev + 1) % suggestions.length);
+      return;
+    }
+    if (e.key === 'ArrowUp' && suggestions.length > 0) {
+      e.preventDefault();
+      setActiveIndex((prev) => (prev <= 0 ? suggestions.length - 1 : prev - 1));
+      return;
+    }
     if (e.key === 'Enter' && !isLoading) {
-      handleSend();
+      if (activeIndex >= 0 && suggestions[activeIndex]) {
+        e.preventDefault();
+        const sug = suggestions[activeIndex];
+        setQuery(sug);
+        onSend(sug);
+        setSuggestions([]);
+        setActiveIndex(-1);
+      } else {
+        handleSend();
+      }
+      return;
+    }
+    if (e.key === 'Tab' && suggestions.length > 0 && activeIndex >= 0) {
+      const sug = suggestions[activeIndex];
+      setQuery(sug);
+      // do not send on Tab, just fill
+      setTimeout(() => setSuggestions([]), 0);
+      return;
+    }
+    if (e.key === 'Escape') {
+      setSuggestions([]);
+      setActiveIndex(-1);
+      return;
     }
   };
 
@@ -126,8 +162,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
   };
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-4">
-      <div className="relative flex items-stretch bg-bg-slate rounded-2xl shadow-xl p-2 border border-white/10">
+    <div className="w-full max-w-4xl mx-auto px-3 sm:px-4">
+      <div className="relative flex items-stretch bg-bg-slate rounded-2xl shadow-xl p-1.5 sm:p-2 border border-white/10">
         <div className="flex items-center gap-3 pr-3 border-r border-white/10">
           <div className="relative flex flex-col rounded-2xl overflow-hidden border border-white/15 bg-white/5 p-1 ring-1 ring-white/10">
             <button
@@ -166,7 +202,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
               className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors" 
               aria-label="Şəkil yüklə"
             >
-              <PlusIcon className="w-6 h-6" />
+              <PlusIcon className="w-5 h-5 md:w-6 md:h-6" />
             </button>
             {showUploadMenu && (
               <div className="absolute left-0 bottom-full mb-2 bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl border border-white/20 py-2 min-w-[180px] z-20 overflow-hidden">
@@ -202,20 +238,21 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyPress={handleKeyPress}
+              onKeyDown={handleKeyDown}
               placeholder="NovEra-dan soruşun..."
-              className={`w-full bg-transparent text-lg text-white placeholder-gray-500 focus:outline-none px-3 ${isListening ? 'ring-1 ring-rose-400/60 rounded-lg' : ''}`}
+              className={`w-full bg-transparent text-base md:text-lg text-white placeholder-gray-500 focus:outline-none px-3 ${isListening ? 'ring-1 ring-rose-400/60 rounded-lg' : ''}`}
               disabled={isLoading}
               onFocus={() => { if (suggestions.length > 0) {/* show stays */} }}
             />
             {suggestions.length > 0 && (
-              <div className="absolute top-full left-0 mt-2 w-full bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 shadow-2xl z-20 overflow-hidden">
-                {suggestions.map((sug) => (
+              <div className="absolute bottom-full left-0 mb-2 w-full bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 shadow-2xl z-20 overflow-auto max-h-64">
+                {suggestions.map((sug, idx) => (
                   <button
                     key={sug}
                     onMouseDown={(e) => { e.preventDefault(); }}
-                    onClick={() => { setQuery(sug); onSend(sug); setSuggestions([]); }}
-                    className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 transition-colors truncate"
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    onClick={() => { setQuery(sug); onSend(sug); setSuggestions([]); setActiveIndex(-1); }}
+                    className={`w-full text-left px-4 py-3 text-sm transition-colors truncate ${idx === activeIndex ? 'bg-accent/20 text-white' : 'text-white/90 hover:bg-white/15'}`}
                     title={sug}
                   >
                     {sug}
@@ -234,19 +271,19 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
             aria-label="Səsi mətinə çevir"
             title="Səsi mətinə çevir"
           >
-            <MicrophoneIcon className="w-6 h-6" />
+            <MicrophoneIcon className="w-5 h-5 md:w-6 md:h-6" />
           </button>
 
           <button onClick={onVoiceClick} className="p-2 rounded-full text-gray-300 hover:text-white hover:bg-white/10 transition-colors" aria-label="Canlı danışıq">
-            <LiveCircleIcon className="w-6 h-6" />
+            <LiveCircleIcon className="w-5 h-5 md:w-6 md:h-6" />
           </button>
 
           <button
             onClick={handleSend}
             disabled={isLoading || !query.trim()}
-            className="p-2 rounded-full bg-accent text-white disabled:bg-gray-600 transition-colors flex items-center justify-center w-10 h-10"
+            className="p-2 rounded-full bg-accent text-white disabled:bg-gray-600 transition-colors flex items-center justify-center w-9 h-9 md:w-10 md:h-10"
           >
-            {isLoading ? <LoadingSpinner className="w-6 h-6" /> : <SendIcon className="w-6 h-6" />}
+            {isLoading ? <LoadingSpinner className="w-5 h-5 md:w-6 md:h-6" /> : <SendIcon className="w-5 h-5 md:w-6 md:h-6" />}
           </button>
         </div>
 

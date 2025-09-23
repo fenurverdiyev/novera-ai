@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import type { NewsArticle } from '../types';
 import { NewsCard } from './NewsCard';
-import { LoadingSpinner, AlertTriangleIcon, SearchIcon, GlobeIcon, MapPinIcon, LocationIcon } from './Icons';
+import { LoadingSpinner, AlertTriangleIcon, SearchIcon, GlobeIcon, MapPinIcon } from './Icons';
 
 interface NewsScreenProps {
   articles: NewsArticle[];

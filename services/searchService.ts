@@ -1,6 +1,16 @@
 import type { PlaceResult, SearchNewsItem, ShoppingProduct } from '../types';
 
 const SERPER_API_KEY = import.meta.env.VITE_SERPER_API_KEY;
+const SERPER_TIMEOUT_MS = 8000; // abort slow requests to keep UI responsive
+const SERPER_CACHE_TTL_MS = 180000; // 3 minutes cache TTL
+const serperCache = new Map<string, { data: any; expires: number }>();
+const cacheKey = (
+  endpoint: string,
+  query: string,
+  num: number,
+  opts: { gl?: string; hl?: string } = {}
+) => `${endpoint}::${query}::${num}::${opts.gl || ''}::${opts.hl || ''}`;
+const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 // Helper to call Serper API to avoid repetition
 async function callSerperApi(
@@ -13,19 +23,47 @@ async function callSerperApi(
     console.error("Serper API key not found.");
     return null;
   }
-  const response = await fetch(`https://google.serper.dev/${endpoint}`, {
-    method: 'POST',
-    headers: {
-      'X-API-KEY': SERPER_API_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ q: query, num, ...opts }),
-  });
-  if (!response.ok) {
-    console.error(`Serper ${endpoint} API error:`, response.status, await response.text());
-    return null;
+  const key = cacheKey(endpoint, query, num, opts);
+  const now = Date.now();
+  const cached = serperCache.get(key);
+  if (cached && cached.expires > now) return cached.data;
+
+  const attemptFetch = async () => {
+    const controller = new AbortController();
+    const to = setTimeout(() => controller.abort(), SERPER_TIMEOUT_MS);
+    try {
+      const response = await fetch(`https://google.serper.dev/${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'X-API-KEY': SERPER_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ q: query, num, ...opts }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`HTTP ${response.status}: ${body}`);
+      }
+      return await response.json();
+    } finally {
+      clearTimeout(to);
+    }
+  };
+
+  let lastErr: any = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const data = await attemptFetch();
+      serperCache.set(key, { data, expires: now + SERPER_CACHE_TTL_MS });
+      return data;
+    } catch (e) {
+      lastErr = e;
+      if (attempt === 0) await sleep(400);
+    }
   }
-  return response.json();
+  console.error(`Serper ${endpoint} API error:`, lastErr);
+  return null;
 }
 
 export function detectLocaleForSearch(): { hl: string; gl: string } {
@@ -83,8 +121,8 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
     callSerperApi('videos', query, maxVideos, { gl, hl }),
   ]);
 
-  const images = imageResults?.images?.map((img: any) => img.imageUrl).filter(Boolean) || [];
-  const videos = videoResults?.videos?.map((vid: any) => vid.link).filter(Boolean) || [];
+  const images = Array.from(new Set((imageResults?.images || []).map((img: any) => img.imageUrl).filter(Boolean)));
+  const videos = Array.from(new Set((videoResults?.videos || []).map((vid: any) => vid.link).filter(Boolean)));
   return { images, videos };
 }
 

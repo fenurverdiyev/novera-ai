@@ -137,19 +137,37 @@ export const fetchNews = async ({ category = 'general', language = 'az', country
     // Fallback: if GNews returns no results (or very few), try Serper News
     if (combined.length < 3) {
         try {
-            const query = buildFallbackQuery(category, language, country || undefined);
-            const serperItems = await serperSearchNews(query, 20, { gl: toGL(country), hl: toHL(language) });
-            if (serperItems && serperItems.length) {
-                const mapped: NewsArticle[] = serperItems.map((n, index) => ({
-                    id: `${n.link}-${index}`,
-                    title: n.title,
-                    summary: n.snippet || null,
-                    url: n.link,
-                    source: n.source || 'Serper',
-                    imageUrl: (n as any).imageUrl || null,
-                    publishedAt: n.date || new Date().toISOString(),
+            if (language === 'all') {
+                const langList = ['az', 'tr', 'ru', 'en'];
+                const serperResults = await Promise.all(langList.map(async (l) => {
+                    const q = buildFallbackQuery(category, l, country || undefined);
+                    const items = await serperSearchNews(q, 20, { gl: toGL(country), hl: toHL(l) });
+                    return (items || []).map((n: any, idx: number): NewsArticle => ({
+                        id: `${l}-${n.link}-${idx}`,
+                        title: n.title,
+                        summary: n.snippet || null,
+                        url: n.link,
+                        source: n.source || 'Serper',
+                        imageUrl: (n as any).imageUrl || null,
+                        publishedAt: n.date || new Date().toISOString(),
+                    }));
                 }));
-                combined = [...combined, ...mapped];
+                combined = [...combined, ...serperResults.flat()];
+            } else {
+                const query = buildFallbackQuery(category, language, country || undefined);
+                const serperItems = await serperSearchNews(query, 20, { gl: toGL(country), hl: toHL(language) });
+                if (serperItems && serperItems.length) {
+                    const mapped: NewsArticle[] = serperItems.map((n, index) => ({
+                        id: `${n.link}-${index}`,
+                        title: n.title,
+                        summary: n.snippet || null,
+                        url: n.link,
+                        source: n.source || 'Serper',
+                        imageUrl: (n as any).imageUrl || null,
+                        publishedAt: n.date || new Date().toISOString(),
+                    }));
+                    combined = [...combined, ...mapped];
+                }
             }
         } catch (e) {
             console.warn('Serper News fallback failed:', e);

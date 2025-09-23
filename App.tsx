@@ -21,6 +21,8 @@ import { Logo } from './components/Logo';
 import { THEMES } from './animations/themes';
 import { useDeviceTools } from './hooks/useDeviceTools';
 import { Profile } from './components/Profile';
+import { GoogleSearchView } from './components/GoogleSearchView';
+import { MenuIcon, CloseIcon } from './components/Icons';
 
 const chunkText = (text: string): string[] => {
   if (!text) return [];
@@ -109,6 +111,11 @@ const buildProductRecommendations = (products: ShoppingProduct[] | undefined | n
   return `\n\nTövsiyələr (məhsullar):\n${bullets}`;
 };
 
+// Only add product recommendations when explicitly asked
+const wantsProductRecommendations = (q: string): boolean => {
+  return /(tövsiy|rekomend|recommend|nə al|ne al|hansı\s+məhsul|which\s+.*buy|what\s+.*buy)/i.test(q);
+};
+
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
@@ -152,7 +159,6 @@ const App: React.FC = () => {
   const [scrollOffset, setScrollOffset] = useState(0);
   const [vocalAudioQueue, setVocalAudioQueue] = useState<string[]>([]);
   const [isVocalPlayback, setIsVocalPlayback] = useState(false);
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null); // For image uploads
@@ -163,6 +169,7 @@ const App: React.FC = () => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const sentenceAudioCacheRef = useRef<Record<string, string | null>>({});
+  const saveTimerRef = useRef<number | null>(null);
 
   const addMessage = useCallback((message: Omit<Message, 'id'>) => {
     setMessages(prev => [...prev, { ...message, id: Date.now().toString() }]);
@@ -197,20 +204,28 @@ const App: React.FC = () => {
 
   useEffect(() => {
     try {
-      localStorage.setItem('nov-era-chat-history', JSON.stringify(messages));
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      // keep storage light: persist only latest 200 messages
+      const snapshot = messages.slice(-200);
+      saveTimerRef.current = window.setTimeout(() => {
+        try { localStorage.setItem('nov-era-chat-history', JSON.stringify(snapshot)); } catch {}
+        saveTimerRef.current = null;
+      }, 250); // debounce to avoid thrashing
     } catch {}
   }, [messages]);
 
   const clearHistory = useCallback(() => {
+    // Archive current conversation into sessions, then clear active chat
     try {
       const current = messages;
       if (current && current.length) {
         const raw = localStorage.getItem('nov-era-sessions');
         const sessions = raw ? JSON.parse(raw) : [];
         const firstUser = current.find(m => m.role === 'user');
-        const title = (firstUser?.text || 'Adsız söhbət').slice(0, 40);
+        const title = (firstUser?.text || 'Adsız söhbət').slice(0, 60);
         sessions.unshift({ id: Date.now(), title, time: Date.now(), messages: current });
-        localStorage.setItem('nov-era-sessions', JSON.stringify(sessions.slice(0, 50)));
+        localStorage.setItem('nov-era-sessions', JSON.stringify(sessions.slice(0, 100)));
+        try { window.dispatchEvent(new Event('nov-era-sessions-updated')); } catch {}
       }
       localStorage.removeItem('nov-era-chat-history');
     } catch {}
@@ -252,12 +267,13 @@ const App: React.FC = () => {
         const willFetchVisualsG = hasVisualIntent(groundedQuery) || hasShoppingIntent(groundedQuery) || hasNewsIntent(groundedQuery) || hasPlaceIntent(groundedQuery);
         const visualImgCountG = hasVisualIntent(groundedQuery) ? 6 : 4;
         const visualVidCountG = hasVisualIntent(groundedQuery) ? 3 : 2;
-        const visualsPromiseG = willFetchVisualsG ? searchImagesAndVideos(groundedQuery, visualImgCountG, visualVidCountG) : null;
+        const visualsQueryG = hasVisualIntent(groundedQuery) ? refineVisualQuery(groundedQuery, [...history, userMessage]) : groundedQuery;
+        const visualsPromiseG = willFetchVisualsG ? searchImagesAndVideos(visualsQueryG, visualImgCountG, visualVidCountG) : null;
         const placesPromiseG = hasPlaceIntent(groundedQuery) ? (async () => {
           const { hl, gl } = detectLocaleForSearch();
           return await searchPlaces(groundedQuery, 8, { hl, gl });
         })() : null;
-        const newsPromiseG = hasNewsIntent(groundedQuery) ? searchNews(groundedQuery) : null;
+        const newsPromiseG = hasNewsIntent(groundedQuery) ? (() => { const { hl, gl } = getPreferredNewsLocale(); return searchNews(groundedQuery, 10, { hl, gl }); })() : null;
         const shoppingPromiseG = hasShoppingIntent(groundedQuery) ? searchShopping(groundedQuery) : null;
 
         const { text, sources } = await answerWithGroundedSearch(groundedQuery, undefined, JSON.stringify(history));
@@ -302,10 +318,8 @@ const App: React.FC = () => {
             const sr = await shoppingPromiseG;
             if (sr && sr.length) {
               setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, products: sr } : msg));
-              const rec = buildProductRecommendations(sr);
-              if (rec) {
-                setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
-              }
+              const rec = wantsProductRecommendations(groundedQuery) ? buildProductRecommendations(sr) : '';
+              if (rec) setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
             }
           } catch {}
         }
@@ -336,12 +350,13 @@ const App: React.FC = () => {
       }
       const visualImgCount = hasVisualIntent(groundedQuery) ? 6 : 4;
       const visualVidCount = hasVisualIntent(groundedQuery) ? 3 : 2;
-      const visualsPromise = willFetchVisuals ? searchImagesAndVideos(groundedQuery, visualImgCount, visualVidCount) : null;
+      const visualsQuery = hasVisualIntent(groundedQuery) ? refineVisualQuery(groundedQuery, [...history, userMessage]) : groundedQuery;
+      const visualsPromise = willFetchVisuals ? searchImagesAndVideos(visualsQuery, visualImgCount, visualVidCount) : null;
       const placesPromise = willFetchPlaces ? (async () => {
         const { hl, gl } = detectLocaleForSearch();
         return await searchPlaces(groundedQuery, 8, { hl, gl });
       })() : null;
-      const newsPromise = willFetchNews ? searchNews(groundedQuery) : null;
+      const newsPromise = willFetchNews ? (() => { const { hl, gl } = getPreferredNewsLocale(); return searchNews(groundedQuery, 10, { hl, gl }); })() : null;
       const shoppingPromise = willFetchShopping ? searchShopping(groundedQuery) : null;
 
       let firstChunk = true;
@@ -378,7 +393,8 @@ const App: React.FC = () => {
           if (webSearchCalls.length > 0) {
             for (const call of webSearchCalls) {
               const { query, maxImages, maxVideos } = call.functionCall.args;
-              const searchResult = await searchImagesAndVideos(query, maxImages, maxVideos);
+              const refined = refineVisualQuery(query, [...history, userMessage]);
+              const searchResult = await searchImagesAndVideos(refined, maxImages, maxVideos);
               setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
                 ...msg,
                 images: [...(msg.images || []), ...searchResult.images],
@@ -457,10 +473,8 @@ const App: React.FC = () => {
               const sr = await shoppingPromise;
               if (sr && sr.length) {
                   setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, products: sr } : msg));
-                  const rec = buildProductRecommendations(sr);
-                  if (rec) {
-                    setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
-                  }
+                  const rec = wantsProductRecommendations(groundedQuery) ? buildProductRecommendations(sr) : '';
+                  if (rec) setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
               }
           } catch {}
       }
@@ -499,6 +513,8 @@ const App: React.FC = () => {
 
   const renderView = () => {
     switch (activeView) {
+        case 'browser': return <BrowserView />;
+        case 'google-search': return <GoogleSearchView />;
         case 'news': return <News themeColor={activeThemeColor} />;
         case 'weather': return <Weather />;
         case 'translate': return <Translate />;
@@ -510,17 +526,17 @@ const App: React.FC = () => {
                 <div className="flex flex-col h-full bg-bg-jet/80 backdrop-blur-sm">
                     <main className="flex-grow overflow-y-auto" onScroll={handleScroll}>
                         {messages.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-full text-center px-4">
-                            <Logo isLarge={true} className="mb-4" />
-                            <h1 className="text-4xl font-bold text-text-main">Bu gün sizə necə kömək edə bilərəm?</h1>
-                        </div>
+                            <div className="flex flex-col items-center justify-center h-full text-center px-4">
+                                <Logo isLarge={true} className="mb-4" />
+                                <h1 className="text-4xl font-bold text-text-main">Bu gün sizə necə kömək edə bilərəm?</h1>
+                            </div>
                         ) : (
-                        <div>
-                            {messages.map(msg => (
-                            <MessageDisplay key={msg.id} message={msg} onRelatedQuery={(q) => handleSend(q)} onPlayAudio={handlePlayAudio} playingMessageId={playingMessageId} />
-                            ))}
-                            <div ref={messagesEndRef} />
-                        </div>
+                            <div>
+                                {messages.map(msg => (
+                                    <MessageDisplay key={msg.id} message={msg} onRelatedQuery={(q) => handleSend(q)} onPlayAudio={handlePlayAudio} playingMessageId={playingMessageId} />
+                                ))}
+                                <div ref={messagesEndRef} />
+                            </div>
                         )}
                     </main>
                     <footer className="bg-transparent pt-2">
@@ -536,7 +552,7 @@ const App: React.FC = () => {
                         </p>
                     </footer>
                 </div>
-            )
+            );
     }
   };
 
@@ -693,6 +709,153 @@ const App: React.FC = () => {
     processVocalStream();
   };
 
+  const BROWSER_ENGINE_ID = (import.meta.env.VITE_GOOGLE_CSE_CX as string) || '5237681e820004cf3';
+  const BROWSER_API_KEY = (import.meta.env.VITE_GOOGLE_CSE_JSON_KEY as string) || 'AIzaSyBt0BqJ2W667MLBoCb7W4WPi90BztylwrQ';
+
+  const BrowserView: React.FC = () => {
+    const [q, setQ] = React.useState('');
+    const [results, setResults] = React.useState<Array<{ title: string; link: string; snippet: string; displayLink?: string }>>([]);
+    const [loading, setLoading] = React.useState(false);
+    const [error, setError] = React.useState<string | null>(null);
+    const [viewerUrl, setViewerUrl] = React.useState<string | null>(null);
+
+    React.useEffect(() => {
+      // Load requested CSE snippet (does not interfere with our custom rendering)
+      const id = `gcse-script-${BROWSER_ENGINE_ID}`;
+      if (!document.getElementById(id)) {
+        const s = document.createElement('script');
+        s.id = id;
+        s.async = true;
+        s.src = `https://cse.google.com/cse.js?cx=${BROWSER_ENGINE_ID}`;
+        document.body.appendChild(s);
+      }
+    }, []);
+
+    const doSearch = async (start: number = 1) => {
+      const query = q.trim();
+      if (!query) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const url = `https://www.googleapis.com/customsearch/v1?key=${BROWSER_API_KEY}&cx=${BROWSER_ENGINE_ID}&q=${encodeURIComponent(query)}&start=${start}`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+          throw new Error(data?.error?.message || 'CSE xətası');
+        }
+        const items = (data.items || []).map((it: any) => ({
+          title: it.title,
+          link: it.link,
+          snippet: it.snippet || it.htmlSnippet?.replace(/<[^>]+>/g, '') || '',
+          displayLink: it.displayLink,
+        }));
+        setResults(items);
+      } catch (e: any) {
+        setError(e?.message || 'Axtarış mümkün olmadı');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    return (
+      <div className="flex flex-col h-full bg-bg-jet/80 backdrop-blur-sm p-4">
+        {/* Hidden GCSE element to satisfy the requirement */}
+        <div className="hidden"><div className="gcse-search" /></div>
+
+        <div className="w-full max-w-3xl mx-auto">
+          <div className="relative flex items-center">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') doSearch(1); }}
+              placeholder="Axtarış edin..."
+              className="w-full bg-black/30 rounded-full py-3.5 pl-5 pr-28 text-white text-lg focus:outline-none focus:ring-2 focus:ring-accent/80 border border-white/20 ring-1 ring-white/10"
+            />
+            <button onClick={() => doSearch(1)} className="absolute right-3 top-1/2 -translate-y-1/2 px-4 py-2 rounded-full bg-white/10 hover:bg-white/15 text-white/90 text-sm">Axtar</button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto mt-4">
+          {loading && <div className="text-center text-white/80">Yüklənir...</div>}
+          {error && <div className="text-center text-rose-300">{error}</div>}
+          {!loading && !error && results.length > 0 && (
+            <ul className="space-y-3 max-w-3xl mx-auto">
+              {results.map((r, i) => (
+                <li key={i} className="p-4 bg-white/5 rounded-xl border border-white/10 hover:bg-white/10 transition-colors">
+                  <a href={r.link} onClick={(e) => { e.preventDefault(); setViewerUrl(r.link); }} className="text-lg font-semibold text-blue-400 hover:underline">{r.title}</a>
+                  <div className="text-xs text-green-400 mt-0.5">{r.displayLink || r.link}</div>
+                  <p className="text-sm text-white/80 mt-1">{r.snippet}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {viewerUrl && (
+            <div className="max-w-5xl mx-auto mt-5">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-white/70 truncate text-sm">{viewerUrl}</div>
+                <div className="flex items-center gap-2">
+                  <a href={viewerUrl} target="_blank" rel="noreferrer" className="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 text-white/90 text-sm">Yeni tabda aç</a>
+                  <button onClick={() => setViewerUrl(null)} className="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 text-white/90 text-sm">Bağla</button>
+                </div>
+              </div>
+              <div className="h-[68vh] rounded-xl overflow-hidden border border-white/15 bg-black/20">
+                <iframe src={viewerUrl} className="w-full h-full" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+              </div>
+              <div className="text-xs text-white/50 mt-2">Qeyd: Bəzi saytlar təhlükəsizlik səbəbi ilə daxildə (iframe) açılmaya bilər.</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const containsProperNoun = (text: string): boolean => {
+    // Detect single or multi-word capitalized names (supports Azerbaijani diacritics)
+    const re = /\b([A-ZƏÖĞÇŞİÜ][a-zəöğçşıü]+(?:\s+[A-ZƏÖĞÇŞİÜ][a-zəöğçşıü]+)*)\b/g;
+    return re.test(text);
+  };
+
+  const extractSubjectFromHistory = (history: Message[]): string | null => {
+    const skip = new Set(['NovEra', 'AI', 'Google', 'Gemini']);
+    for (let i = history.length - 1; i >= 0; i--) {
+      const t = history[i].text || '';
+      const re = /\b([A-ZƏÖĞÇŞİÜ][a-zəöğçşıü]+(?:\s+[A-ZƏÖĞÇŞİÜ][a-zəöğçşıü]+)*)\b/g;
+      const matches = t.match(re);
+      if (matches && matches.length) {
+        const candidate = matches.find(m => !skip.has(m));
+        if (candidate) return candidate;
+      }
+    }
+    return null;
+  };
+
+  const refineVisualQuery = (query: string, history: Message[]): string => {
+    if (containsProperNoun(query)) return query;
+    const generic = /(şəkil(lərini)?|sekil(lerini)?|foto(larını)?|fotolar|görüntü|image|images|pictures|pics|video(larını)?|videolar|göstər|goster|çıxart|cixart|onu|onun)/i.test(query);
+    if (!generic) return query;
+    const subject = extractSubjectFromHistory(history);
+    if (!subject) return query;
+    if (/video|videolar/i.test(query)) return `${subject} videoları`;
+    if (/şəkil|sekil|foto|fotolar|image|images|pictures|pics/i.test(query)) return `${subject} şəkilləri`;
+    return subject;
+  };
+
+  const getPreferredNewsLocale = useCallback((): { hl: string; gl: string } => {
+    try {
+      const saved = localStorage.getItem('nov-era-news-language');
+      const { hl, gl } = detectLocaleForSearch();
+      if (saved && saved !== 'all') {
+        return { hl: saved.toLowerCase(), gl };
+      }
+      return { hl, gl };
+    } catch {
+      return detectLocaleForSearch();
+    }
+  }, []);
+
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
   return (
     <div className={`flex h-screen bg-transparent text-text-main transition-opacity duration-500 ${isAppReady ? 'opacity-100' : 'opacity-0'}`}>
       {ActiveAnimation && (
@@ -702,8 +865,38 @@ const App: React.FC = () => {
           customColor={settings.theme === 'novera' ? (settings.noveraColor || '#000000') : undefined}
         />
       )}
-      <Sidebar activeView={activeView} setActiveView={setActiveView} onNewChat={clearHistory} themeColor={activeThemeColor} onOpenSession={loadSession} />
-      <div className="flex-1 flex flex-col overflow-y-hidden">
+      {/* Desktop sidebar */}
+      <div className="hidden md:block">
+        <Sidebar activeView={activeView} setActiveView={setActiveView} onNewChat={clearHistory} themeColor={activeThemeColor} onOpenSession={loadSession} />
+      </div>
+
+      {/* Mobile overlay sidebar */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 z-50 md:hidden" onClick={() => setIsSidebarOpen(false)}>
+          <div className="absolute inset-0 bg-black/50" />
+          <div className="absolute left-0 top-0 h-full w-64 max-w-[80%]" onClick={(e) => e.stopPropagation()}>
+            <div className="h-full bg-bg-slate/95 backdrop-blur-md border-r border-white/10 shadow-2xl">
+              <div className="flex items-center justify-between px-3 py-3 border-b border-white/10">
+                <span className="text-white/80 text-sm">Menyu</span>
+                <button onClick={() => setIsSidebarOpen(false)} className="p-2 rounded-lg hover:bg-white/10 text-white/80">
+                  <CloseIcon className="w-5 h-5" />
+                </button>
+              </div>
+              <Sidebar activeView={activeView} setActiveView={(v) => { setActiveView(v); setIsSidebarOpen(false); }} onNewChat={() => { clearHistory(); setIsSidebarOpen(false); }} themeColor={activeThemeColor} onOpenSession={(msgs) => { loadSession(msgs); setIsSidebarOpen(false); }} />
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="flex-1 flex flex-col overflow-y-hidden w-0 min-w-0">
+        {/* Mobile top bar */}
+        <div className="md:hidden flex items-center justify-between px-3 py-2 border-b border-white/10 bg-bg-slate/80 backdrop-blur sticky top-0 z-40">
+          <button onClick={() => setIsSidebarOpen(true)} className="p-2 rounded-lg hover:bg-white/10 text-white/90" aria-label="Menyunu aç">
+            <MenuIcon className="w-6 h-6" />
+          </button>
+          <Logo />
+          <button onClick={clearHistory} className="px-3 py-1.5 rounded-lg bg-accent/20 text-white hover:bg-accent/30 text-xs">Yeni söhbət</button>
+        </div>
+
         {renderView()}
       </div>
       <input 

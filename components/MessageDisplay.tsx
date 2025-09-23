@@ -216,8 +216,19 @@ const NewsCard: React.FC<{ article: SearchNewsItem }> = ({ article }) => {
 };
 
 const ProductCard: React.FC<{ product: ShoppingProduct }> = ({ product }) => {
+  const normalizeLink = (url?: string): string => {
+    if (!url) return '#';
+    try {
+      // valid absolute URL
+      return new URL(url).href;
+    } catch {
+      if (url.startsWith('//')) return 'https:' + url;
+      return 'https://' + url.replace(/^\/*/, '');
+    }
+  };
+  const href = normalizeLink(product.link);
   return (
-    <a href={product.link} target="_blank" rel="noopener noreferrer" className="block rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors">
+    <a href={href} target="_blank" rel="noopener noreferrer" className="block rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors">
         {product.imageUrl && (
           <div className="aspect-square w-full bg-white/10 rounded-lg mb-3 overflow-hidden">
             <img src={product.imageUrl} alt={product.title} className="w-full h-full object-contain" />
@@ -250,8 +261,8 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
   };
 
   return (
-    <div className={`py-8 ${isUser ? '' : 'bg-bg-slate/80'}`}>
-      <div className="max-w-4xl mx-auto px-4 flex gap-4">
+    <div className={`py-6 md:py-8 ${isUser ? '' : 'bg-bg-slate/80'}`}>
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 flex gap-3 sm:gap-4">
         <div className="flex-shrink-0">
           {isUser ? (
             avatarUrl ? (
@@ -267,7 +278,7 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
           {!isUser && message.progressStep && (
             <Stepper step={message.progressStep} />
           )}
-          <div className="max-w-none text-text-main leading-relaxed">
+          <div className="max-w-none text-text-main leading-relaxed text-[15px] md:text-base">
              {formatText(message.text)}
              {message.isLoading && !message.text && <div className="w-3 h-3 bg-accent animate-pulse rounded-full mt-2"></div>}
           </div>

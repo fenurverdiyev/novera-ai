@@ -25,6 +25,17 @@ export const News: React.FC<{ themeColor?: string }> = ({ themeColor }) => {
   
   const { countryCode, loading: geoLoading, error: geoError } = useGeolocation();
 
+  // Initialize from saved preference if available
+  useEffect(() => {
+    try {
+      const savedLang = localStorage.getItem('nov-era-news-language');
+      if (savedLang) {
+        setLanguage(savedLang);
+        setHasManualLanguage(true);
+      }
+    } catch {}
+  }, []);
+
   // Geolokasiyaya görə dili təyin et (yalnız istifadəçi manual dəyişməyibsə)
   useEffect(() => {
     if (region === 'local' && countryCode && !hasManualLanguage) {
@@ -37,6 +48,7 @@ export const News: React.FC<{ themeColor?: string }> = ({ themeColor }) => {
   const handleSetLanguage = (lang: string) => {
     setHasManualLanguage(true);
     setLanguage(lang);
+    try { localStorage.setItem('nov-era-news-language', lang); } catch {}
   };
 
   const countryToFetch = region === 'local' && countryCode ? countryCode : null;

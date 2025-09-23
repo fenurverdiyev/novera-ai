@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import type { AppView, Message } from '../types';
-import { SearchIcon, NewsIcon, WeatherIcon, TranslateIcon, SettingsIcon, UserIcon, PlusIcon, SparklesIcon, BookmarkIcon, CloseIcon } from './Icons';
+import { SearchIcon, NewsIcon, WeatherIcon, TranslateIcon, SettingsIcon, UserIcon, PlusIcon, SparklesIcon, BookmarkIcon, CloseIcon, GlobeIcon } from './Icons';
 import { Logo } from './Logo';
 
 interface SidebarProps {
@@ -12,6 +12,7 @@ interface SidebarProps {
 }
 
 const navItems = [
+  { id: 'google-search', icon: GlobeIcon, label: 'Brauzer' },
   { id: 'search', icon: SparklesIcon, label: 'Al' },
   { id: 'news', icon: NewsIcon, label: 'Xəbərlər' },
   { id: 'weather', icon: WeatherIcon, label: 'Hava' },
@@ -54,7 +55,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
       if (e.key === 'nov-era-sessions') refreshSessions();
     };
     window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    const onCustom = () => refreshSessions();
+    // same-document updates won't trigger 'storage' event; listen to a custom event
+    window.addEventListener('nov-era-sessions-updated' as any, onCustom as any);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('nov-era-sessions-updated' as any, onCustom as any);
+    };
   }, []);
 
   const handleLongPressStart = (e: React.PointerEvent, id: number) => {
@@ -86,17 +93,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
 
   return (
     <nav className="w-60 bg-bg-slate/90 backdrop-blur-sm flex flex-col py-4 border-r border-white/10">
-      <div className="px-4 mb-4 flex items-center gap-2">
+      <div className="px-4 mb-4 flex items-center justify-between gap-2">
         <Logo />
-      </div>
-
-      <div className="px-3 mb-3">
         <button
           onClick={onNewChat}
-          className="w-full inline-flex items-center gap-2 px-3 py-2.5 rounded-xl bg-accent/15 text-accent hover:bg-accent/25 transition-colors ring-1 ring-accent/40 shadow-[0_0_8px_rgba(88,166,255,0.35)]"
+          className="p-2 rounded-lg bg-accent/15 text-accent hover:bg-accent/25 transition-colors ring-1 ring-accent/40 shadow-[0_0_8px_rgba(88,166,255,0.35)]"
         >
           <PlusIcon className="w-5 h-5" />
-          <span className="text-sm font-medium">Yeni söhbət</span>
         </button>
       </div>
 
