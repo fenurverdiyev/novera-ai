@@ -4,10 +4,14 @@ import type { Source, NewsArticle, WeatherData, Message } from '../types';
 import { searchWeb as serperSearchWeb, SerperResponse, detectLocaleForSearch } from './searchService';
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+const GEMINI_TRANSLATE_API_KEY = import.meta.env.VITE_GEMINI_TRANSLATE_API_KEY;
 
 // Do not crash the app if the API key is missing; degrade gracefully instead
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
-const model = 'gemini-1.5-flash-latest';
+const aiTranslate = GEMINI_TRANSLATE_API_KEY
+  ? new GoogleGenAI({ apiKey: GEMINI_TRANSLATE_API_KEY })
+  : (GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null);
+const model = 'gemini-2.5-flash';
 
 // Add new device assistant functions
 // Fix: The type `FunctionDeclarationTool[]` is incorrect and has been replaced with `Tool[]`.
@@ -155,7 +159,7 @@ export async function* streamChatQuery(
         return;
     }
     const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
-    const systemInstruction = "Sən NovEra adlı bir köməkçi assistantsan və bütün cavablarını Azərbaycan dilində verməlisən. İstifadəçinin sorğusu şəkil, video və ya hər hansı bir vizual məlumat axtarışını nəzərdə tutursa, `webSearch` alətini çağırmaq MƏCBURİDİR. Məsələn, 'pişik şəkilləri' sorğusu üçün `webSearch({query: 'pişiklər'})` çağırmalısan. Alətdən istifadə etmədən vizual məzmun haqqında cavab vermə. Alətdən gələn nəticələri təsvir edərkən detallı ol." + memoryBlock;
+    const systemInstruction = `Sən NovEra adlı bir köməkçi assistantsan və bütün cavablarını Azərbaycan dilində verməlisən. Hər cavabın əvvəlində qısa təqdimat ver: 'Mən NovEra-yam — NovEra şirkəti tərəfindən yaradılmış AI köməkçi.' Mətn cavablar üçün yalnız Google Search Grounding alətindən (google_search) istifadə et, iddiaları mənbələrlə dəstəklə. Şəkil, video, məkan və alış-veriş nəticələrini toplamaq SƏNİN VƏZİFƏN DEYİL — bunları tətbiq özü (Serper API) təmin edəcək. Vizual linkləri uydurma və ya özbaşına çıxarma. Mənbələr olduqda cavabın sonunda qısa "Mənbələr" bölməsi göstər.` + memoryBlock;
     
     const historicContent = mapMessagesToContent(history);
     
@@ -177,7 +181,8 @@ export async function* streamChatQuery(
         model,
         contents,
         config: {
-            tools: assistantTools,
+            // Only allow official Google Search grounding for text answers
+            tools: ([{ google_search: {} }]) as any,
             systemInstruction,
         },
     });
@@ -406,42 +411,43 @@ export async function translateText(text: string, targetLang: string): Promise<s
         return "";
     }
     try {
-        if (!ai) {
+        if (!aiTranslate) {
             // Fallback: no translation available
             return text;
         }
-        const response = await ai.models.generateContent({
-            model,
-            contents: `Translate the following text to ${targetLang}. Return only the translated text, with no additional commentary or explanations. Text to translate: "${text}"`,
+        const response = await aiTranslate.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: `Translate the following text to ${targetLang}. Rules:\n- Preserve original line breaks.\n- Return ONLY the translated text.\n- Do NOT add quotes, code fences, or any commentary.\n\nTEXT:\n${text}`,
+            config: { responseMimeType: 'text/plain' as any },
         });
-        return response.text.trim();
+        let out = (response.text || '').trim();
+        // Strip accidental fences/quotes
+        out = out.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
+        if ((out.startsWith('"') && out.endsWith('"')) || (out.startsWith("'") && out.endsWith("'"))) {
+            out = out.slice(1, -1);
+        }
+        return out.trim();
     } catch (error) {
         console.error("Error translating text:", error);
         throw new Error("Tərcümə etmək mümkün olmadı.");
     }
 }
-
 /**
- * Answers a query by first performing a Serper web search and then asking Gemini to
- * respond using those results as context. Returns the model's text and normalized sources.
+ * Answers a query by performing a grounded call with Google Search tools enabled.
+ * Falls back to Serper listing when AI is unavailable.
  * This does not stream; it performs a single request for simplicity.
  */
 export async function answerWithGroundedSearch(query: string, opts?: { num?: number; gl?: string; hl?: string }, memory?: string) {
-  // 1) Get web results via Serper (using dev proxy or serverless proxy hidden behind serperService)
-  const { hl, gl } = { hl: opts?.hl, gl: opts?.gl } as { hl?: string; gl?: string };
-  const locale = (!hl || !gl) ? detectLocaleForSearch() : { hl, gl } as { hl: string; gl: string };
-  const serper: SerperResponse | null = await serperSearchWeb(query, Math.min(opts?.num ?? 8, 12), { gl: locale.gl, hl: locale.hl });
-  const organic = serper?.organic || [];
-
-  // Normalize top sources
-  const sources: Source[] = organic.slice(0, 6).map((r, i) => ({
-    uri: r.link,
-    title: r.title || new URL(r.link).hostname,
-    index: i + 1,
-  }));
-
-  // If AI is not available, return a simple sources-based answer instead of failing
+  // Fallback path when AI is unavailable: return Serper results as a simple list
   if (!ai) {
+    const locale = (opts?.hl && opts?.gl) ? { hl: opts.hl, gl: opts.gl } : detectLocaleForSearch();
+    const serper: SerperResponse | null = await serperSearchWeb(query, Math.min(opts?.num ?? 8, 12), { gl: locale.gl, hl: locale.hl });
+    const organic = serper?.organic || [];
+    const sources: Source[] = organic.slice(0, 6).map((r, i) => ({
+      uri: r.link,
+      title: r.title || new URL(r.link).hostname,
+      index: i + 1,
+    }));
     const list = organic.slice(0, 6).map((r, i) => `${i + 1}) ${r.title} — ${r.link}`).join('\n');
     const text = organic.length
       ? `Axtarış nəticələri (Serper):\n${list}\n\nDaha dəqiq cavab üçün AI açarını (VITE_GEMINI_API_KEY) konfiqurasiya edin.`
@@ -449,30 +455,41 @@ export async function answerWithGroundedSearch(query: string, opts?: { num?: num
     return { text, sources };
   }
 
-  // Build compact context block for the model
-  const context = organic.slice(0, 8).map((r, i) => (
-    `[${i + 1}] ${r.title}\n${r.snippet}\n${r.link}`
-  )).join("\n\n");
-
+  // Grounding with Google Search via Gemini tools
   const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
-  const systemInstruction = `Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver.\n\n` +
-     `Aşağıdakı VEB KONTEXTİ-dən (Serper nəticələri) istifadə et.\n` +
-     `MÜTLƏQ şəkildə iddialarını [1], [2], ... kimi mənbələrlə istinad et.\n` +
-     `Əgər kontekstdə cavab yoxdursa, bunu de və ehtiyatlı cavab ver.\n` + memoryBlock;
+  const systemInstruction = `Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver. Cavabın əvvəlində qısa təqdimat ver: "Mən NovEra-yam — NovEra şirkəti tərəfindən yaradılmış AI köməkçi."\n\n` +
+    `Mütləq şəkildə iddialarını mənbələrlə dəstəklə və cavabın sonunda \"Mənbələr\" bölməsində linkləri göstər.\n` +
+    `Əgər dəqiq cavab tapılmırsa, bunu açıq şəkildə bildir.` + memoryBlock;
 
-  const contents: Content[] = [
-    { role: 'user', parts: [{ text: `SORĞU:\n${query}\n\nVEB KONTEXTİ:\n${context}` }] },
-  ];
+  const contents: Content[] = [{ role: 'user', parts: [{ text: query }] }];
 
+  const groundedModel = 'gemini-2.5-flash';
   const response = await ai.models.generateContent({
-    model,
+    model: groundedModel,
     contents,
     config: {
-      // We pass context inline; official Google Search grounding can be wired later.
       systemInstruction,
+      // Enable official Google Search Grounding
+      tools: [{ google_search: {} } as any],
     },
   });
 
   const text = response.text?.trim() || '';
+
+  // Extract grounded sources from grounding metadata
+  const seenUris = new Set<string>();
+  const sources: Source[] = [];
+  const groundingChunks = (response as any)?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+  if (Array.isArray(groundingChunks)) {
+    let index = 1;
+    for (const { web } of groundingChunks) {
+      if (web?.uri && !seenUris.has(web.uri)) {
+        sources.push({ uri: web.uri, title: web.title || new URL(web.uri).hostname, index });
+        seenUris.add(web.uri);
+        index++;
+      }
+    }
+  }
+
   return { text, sources };
 }

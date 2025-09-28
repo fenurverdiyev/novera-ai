@@ -1,5 +1,10 @@
 import type { PlaceResult, SearchNewsItem, ShoppingProduct } from '../types';
 
+// Optional Google CSE fallback (BrowserView already uses these)
+const CSE_KEY = import.meta.env.VITE_GOOGLE_CSE_JSON_KEY as string | undefined;
+const CSE_CX = import.meta.env.VITE_GOOGLE_CSE_CX as string | undefined;
+const USE_CSE_VISUALS = (import.meta.env.VITE_USE_CSE_VISUALS as string | undefined) === 'true';
+
 const SERPER_API_KEY = import.meta.env.VITE_SERPER_API_KEY;
 const SERPER_TIMEOUT_MS = 8000; // abort slow requests to keep UI responsive
 const SERPER_CACHE_TTL_MS = 180000; // 3 minutes cache TTL
@@ -20,8 +25,7 @@ async function callSerperApi(
   opts: { gl?: string; hl?: string } = {}
 ) {
   if (!SERPER_API_KEY) {
-    console.error("Serper API key not found.");
-    return null;
+    console.error("Serper API key not found. Will try proxy fallbacks.");
   }
   const key = cacheKey(endpoint, query, num, opts);
   const now = Date.now();
@@ -32,13 +36,15 @@ async function callSerperApi(
     const controller = new AbortController();
     const to = setTimeout(() => controller.abort(), SERPER_TIMEOUT_MS);
     try {
+      const glLower = opts.gl ? opts.gl.toLowerCase() : undefined;
+      const hlLower = opts.hl ? opts.hl.toLowerCase() : undefined;
       const response = await fetch(`https://google.serper.dev/${endpoint}`, {
         method: 'POST',
         headers: {
           'X-API-KEY': SERPER_API_KEY,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ q: query, num, ...opts }),
+        body: JSON.stringify({ q: query, num, ...(glLower ? { gl: glLower } : {}), ...(hlLower ? { hl: hlLower } : {}), }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -52,7 +58,8 @@ async function callSerperApi(
   };
 
   let lastErr: any = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const attempts = SERPER_API_KEY ? 2 : 0; // only attempt direct calls if key exists
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const data = await attemptFetch();
       serperCache.set(key, { data, expires: now + SERPER_CACHE_TTL_MS });
@@ -63,6 +70,33 @@ async function callSerperApi(
     }
   }
   console.error(`Serper ${endpoint} API error:`, lastErr);
+  // Fallback: try serverless proxy routes (Vercel/Netlify) to bypass CORS or mask key
+  const proxyBody = {
+    type: endpoint,
+    q: query,
+    num,
+    ...(opts.gl ? { gl: opts.gl.toLowerCase() } : {}),
+    ...(opts.hl ? { hl: opts.hl.toLowerCase() } : {}),
+  } as any;
+  const proxyEndpoints = [
+    '/api/serper-proxy',
+    '/functions/serper-proxy',
+    '/.netlify/functions/serper-proxy',
+  ];
+  for (const url of proxyEndpoints) {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(proxyBody),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        serperCache.set(key, { data, expires: now + SERPER_CACHE_TTL_MS });
+        return data;
+      }
+    } catch {}
+  }
   return null;
 }
 
@@ -73,8 +107,8 @@ export function detectLocaleForSearch(): { hl: string; gl: string } {
     if (typeof navigator !== 'undefined') {
       const navLang = navigator.language || 'en-US';
       const [langPart, regionPart] = navLang.split('-');
-      hl = langPart || 'en';
-      gl = regionPart || 'US';
+      hl = (langPart || 'en').toLowerCase();
+      gl = (regionPart || 'US').toLowerCase();
     }
   } catch {}
   return { hl, gl };
@@ -115,14 +149,101 @@ export async function suggestAutocomplete(q: string, opts?: { hl?: string; gl?: 
 }
 
 export async function searchImagesAndVideos(query: string, maxImages = 6, maxVideos = 3): Promise<{ images: string[]; videos: string[] }> {
+  // If explicitly configured, use Google CSE as primary provider for visuals
+  if (USE_CSE_VISUALS && CSE_KEY && CSE_CX) {
+    try {
+      const imgUrl = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(query)}&searchType=image&num=${Math.min(Math.max(maxImages,1),10)}&safe=active`;
+      const vidQ = `${query} site:youtube.com/watch`;
+      const vidUrl = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(vidQ)}&num=${Math.min(Math.max(maxVideos,1),10)}&safe=active`;
+      const [ir, vr] = await Promise.all([fetch(imgUrl), fetch(vidUrl)]);
+      const [id, vd] = await Promise.all([ir.json(), vr.json()]);
+      const imgSet = new Set<string>(
+        ((id.items || []) as any[])
+          .map((it: any) => (it.link || it.image?.thumbnailLink || it.pagemap?.cse_image?.[0]?.src) as string)
+          .filter(Boolean)
+      );
+      const vidSet = new Set<string>(
+        ((vd.items || []) as any[])
+          .map((it: any) => (it.link || it.formattedUrl || it.pagemap?.videoobject?.[0]?.url) as string)
+          .filter(Boolean)
+      );
+      const imgs: string[] = Array.from(imgSet).slice(0, maxImages);
+      const vids: string[] = Array.from(vidSet).slice(0, maxVideos);
+      return { images: imgs, videos: vids };
+    } catch {}
+  }
   const { hl, gl } = detectLocaleForSearch();
+  const hl2 = (hl || 'en').toLowerCase();
+  const gl2 = (gl || 'us').toLowerCase();
   const [imageResults, videoResults] = await Promise.all([
-    callSerperApi('images', query, maxImages, { gl, hl }),
-    callSerperApi('videos', query, maxVideos, { gl, hl }),
+    callSerperApi('images', query, maxImages, { gl: gl2, hl: hl2 }),
+    callSerperApi('videos', query, maxVideos, { gl: gl2, hl: hl2 }),
   ]);
 
-  const images = Array.from(new Set((imageResults?.images || []).map((img: any) => img.imageUrl).filter(Boolean)));
-  const videos = Array.from(new Set((videoResults?.videos || []).map((vid: any) => vid.link).filter(Boolean)));
+  const imageItems: any[] = (imageResults?.images || imageResults?.image_results || []) as any[];
+  const videoItems: any[] = (videoResults?.videos || videoResults?.video_results || []) as any[];
+
+  let images = Array.from(new Set(
+    imageItems.map((img: any) => img.imageUrl || img.image || img.thumbnail || img.link).filter(Boolean)
+  ));
+  let videos = Array.from(new Set(
+    videoItems.map((vid: any) => vid.link || vid.videoUrl || vid.url).filter(Boolean)
+  ));
+
+  // Fallback: try general search endpoint to harvest images/videos if empty
+  if (images.length === 0 || videos.length === 0) {
+    try {
+      const alt = await callSerperApi('search', query, Math.max(maxImages, maxVideos), { gl: gl2, hl: hl2 });
+      if (alt) {
+        if (images.length === 0) {
+          const altImgs: any[] = (alt.images || alt.image_results || alt.inlineImages || alt.inline_images || []);
+          const altImageUrls = Array.from(new Set(
+            (altImgs || []).map((img: any) => img.imageUrl || img.image || img.thumbnail || img.link).filter(Boolean)
+          ));
+          if (altImageUrls.length) images = altImageUrls.slice(0, maxImages);
+        }
+        if (videos.length === 0) {
+          const altVids: any[] = (alt.videos || alt.video_results || alt.inlineVideos || alt.inline_videos || []);
+          const altVideoUrls = Array.from(new Set(
+            (altVids || []).map((vid: any) => vid.link || vid.videoUrl || vid.url).filter(Boolean)
+          ));
+          if (altVideoUrls.length) videos = altVideoUrls.slice(0, maxVideos);
+        }
+      }
+    } catch {}
+  }
+
+  // Final fallback: Google CSE (if configured and explicitly enabled)
+  const minImg = Math.min(3, maxImages);
+  const minVid = Math.min(2, maxVideos);
+  if (USE_CSE_VISUALS && images.length < minImg && CSE_KEY && CSE_CX) {
+    try {
+      const start = 1;
+      const url = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(query)}&searchType=image&num=${Math.min(Math.max(maxImages,1),10)}&safe=active`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+      const items: any[] = data.items || [];
+      const cseImages = items.map((it: any) => it.link || it.image?.thumbnailLink || it.pagemap?.cse_image?.[0]?.src).filter(Boolean);
+      if (cseImages.length) {
+        const merged = new Set<string>([...images, ...cseImages]);
+        images = Array.from(merged).slice(0, maxImages);
+      }
+    } catch {}
+  }
+  if (USE_CSE_VISUALS && videos.length < minVid && CSE_KEY && CSE_CX) {
+    try {
+      const q = `${query} site:youtube.com/watch`;
+      const url = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(q)}&num=${Math.min(Math.max(maxVideos,1),10)}&safe=active`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+      const items: any[] = data.items || [];
+      const cseVideos = items.map((it: any) => it.link || it.formattedUrl || it.pagemap?.videoobject?.[0]?.url).filter(Boolean);
+      if (cseVideos.length) {
+        const merged = new Set<string>([...videos, ...cseVideos]);
+        videos = Array.from(merged).slice(0, maxVideos);
+      }
+    } catch {}
+  }
   return { images, videos };
 }
 

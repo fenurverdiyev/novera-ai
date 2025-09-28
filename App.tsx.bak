@@ -1,0 +1,437 @@
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { SearchBar } from './components/SearchBar';
+import { MessageDisplay } from './components/MessageDisplay';
+import { streamChatQuery, generateRelatedQuestions, answerWithGroundedSearch } from './services/geminiService';
+import { textToSpeech, AVAILABLE_VOICES } from './services/elevenLabsService';
+import { 
+    searchImagesAndVideos, 
+    searchPlaces, 
+    searchNews, 
+    searchShopping, 
+    detectLocaleForSearch 
+} from './services/searchService';
+import type { Message, AppView, AppSettings, ToolCall, SearchMode, PlaceResult, ShoppingProduct } from './types';
+import { Sidebar } from './components/Sidebar';
+import { News } from './components/News';
+import { Weather } from './components/Weather';
+import { Translate } from './components/Translate';
+import { Settings } from './components/Settings';
+import { VoiceOverlay } from './components/VoiceOverlay';
+import { Logo } from './components/Logo';
+import { THEMES } from './animations/themes';
+import { useDeviceTools } from './hooks/useDeviceTools';
+import { Profile } from './components/Profile';
+import { GoogleSearchView } from './components/GoogleSearchView';
+import { MenuIcon, CloseIcon } from './components/Icons';
+
+const chunkText = (text: string): string[] => {
+  if (!text) return [];
+  const sentences = text.match(/[^.!?…]+[.!?…]*|[^.!?…]+$/g) || [];
+  if (sentences.length === 0) return [text];
+
+  const chunks: string[] = [];
+  let currentChunk = "";
+  const maxChunkSize = 400;
+
+  for (const sentence of sentences) {
+      const trimmedSentence = sentence.trim();
+      if (trimmedSentence.length === 0) continue;
+      if (currentChunk.length > 0 && currentChunk.length + trimmedSentence.length + 1 > maxChunkSize) {
+          chunks.push(currentChunk);
+          currentChunk = "";
+      }
+      currentChunk += (currentChunk.length > 0 ? " " : "") + trimmedSentence;
+  }
+  if (currentChunk.length > 0) chunks.push(currentChunk);
+  return chunks.length > 0 ? chunks : [text];
+};
+
+// Simple visual/places intent detectors
+const hasVisualIntent = (q: string): boolean => {
+  const s = q.toLowerCase();
+  return [
+    'şəkil', 'sekil', 'foto', 'fotolar', 'görüntü', 'image', 'images', 'pictures', 'pics',
+    'video', 'videolar', 'youtube', 'clip', 'media'
+  ].some(k => s.includes(k));
+};
+
+const hasPlaceIntent = (q: string): boolean => {
+  const s = q.toLowerCase();
+  return [
+    'xəritə', 'xerite', 'map', 'məkan', 'mekan', 'yer', 'ünvan', 'unvan',
+    'restoran', 'restoranlar', 'kafe', 'otel', 'otellər', 'hotel', 'market', 'aptek', 'clinic', 'clinic', 'müəssisə', 'magaza', 'mağaza',
+    'near me', 'yaxın', 'closest', 'ətrafda', 'etrafda', 'ailəvi', 'usaqli', 'uşaqlı', 'family'
+  ].some(k => s.includes(k));
+};
+
+const hasNewsIntent = (q: string): boolean => {
+  const s = q.toLowerCase();
+  return ['xəbər', 'news', 'son xəbərlər', 'updates', 'headlines'].some(k => s.includes(k));
+};
+
+const hasShoppingIntent = (q: string): boolean => {
+  const s = q.toLowerCase();
+  // Primary shopping cues
+  const shoppingWords = ['almaq', 'satın', 'buy', 'qiymət', 'price', 'mağaza', 'store', 'shop', 'məhsul', 'product', 'sifariş', 'endirim'];
+  if (shoppingWords.some(k => s.includes(k))) return true;
+  // Common phrasing in AZ: "tap" or "harada/haradan" for products
+  if (/(^|\s)(tap|harada|haradan)(\s|$)/.test(s)) return true;
+  // Heuristic: short brand/product queries (e.g., "nike air", "iphone 15")
+  const tokens = s.split(/\s+/).filter(Boolean);
+  const looksLikeProduct = /\b(iphone|ipad|macbook|samsung|xiaomi|nike|adidas|ps5|playstation|xbox|gpu|rtx|tv|laptop|kamera|kamera|qulaqciq|headphone|saat|watch)\b/.test(s);
+  return looksLikeProduct && tokens.length <= 5;
+};
+
+// Helper: build quick recommendations text for places
+const buildPlaceRecommendations = (places: PlaceResult[] | undefined | null): string => {
+  if (!places || places.length === 0) return '';
+  const top = [...places]
+    .filter(p => (p.rating || 0) > 0)
+    .sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    .slice(0, 3);
+  if (top.length === 0) return '';
+  const bullets = top.map(p => `• ${p.title}${p.rating ? ` — ⭐ ${p.rating.toFixed(1)}` : ''}${p.address ? ` • ${p.address}` : ''}`).join('\n');
+  return `\n\nTövsiyələr (məkanlar):\n${bullets}`;
+};
+
+// Helper: build quick recommendations text for products
+const buildProductRecommendations = (products: ShoppingProduct[] | undefined | null): string => {
+  if (!products || products.length === 0) return '';
+  const normalizePrice = (p?: string): number => {
+    if (!p) return Number.POSITIVE_INFINITY;
+    const m = p.replace(/[^0-9.,]/g, '').replace(',', '.');
+    const n = parseFloat(m);
+    return isNaN(n) ? Number.POSITIVE_INFINITY : n;
+  };
+  const top = [...products]
+    .slice(0, 10)
+    .sort((a, b) => (normalizePrice(a.price) - normalizePrice(b.price)))
+    .slice(0, 3);
+  const bullets = top.map(p => `• ${p.title}${p.price ? ` — ${p.price}` : ''}${p.source ? ` • ${p.source}` : ''}${p.rating ? ` • ⭐ ${p.rating.toFixed(1)}` : ''}`).join('\n');
+  return `\n\nTövsiyələr (məhsullar):\n${bullets}`;
+};
+
+// Only add product recommendations when explicitly asked
+const wantsProductRecommendations = (q: string): boolean => {
+  return /(tövsiy|rekomend|recommend|nə al|ne al|hansı\s+məhsul|which\s+.*buy|what\s+.*buy)/i.test(q);
+};
+
+// Helper to extract the main subject from the last few messages for context
+const extractSubjectFromHistory = (history: Message[]): string | null => {
+    const relevantMessages = history.slice(-5); // Look at last 2-3 turns
+    for (let i = relevantMessages.length - 1; i >= 0; i--) {
+        const msg = relevantMessages[i];
+        if (msg.role === 'user') {
+            // A simple heuristic: if the message is not just a short command, it might contain the subject.
+            const text = msg.text.toLowerCase();
+            const isGeneric = ['şəkil', 'video', 'göstər', 'onun', 'bunun', 'kimdir'].some(k => text.includes(k));
+            if (text.length > 5 && !isGeneric) {
+                return msg.text; // Return the original case
+            }
+        }
+    }
+    return null;
+};
+
+// Refine a query for visual search by looking at conversation history
+const refineVisualQuery = (currentQuery: string, history: Message[]): string => {
+    const q = currentQuery.toLowerCase();
+    const tokens = q.split(/\s+/);
+
+    // If the query is very short or seems generic (e.g., "show me pictures"), look for context.
+    if (tokens.length <= 3) {
+        const subject = extractSubjectFromHistory(history);
+        if (subject) {
+            // Combine the subject with the visual intent word, e.g., "Barış Özcan" + "şəkilləri" -> "Barış Özcan şəkilləri"
+            return `${subject} ${currentQuery}`;
+        }
+    }
+    // Otherwise, the query is likely specific enough
+    return currentQuery;
+};
+
+// Decide whether to allow web search for this query
+const shouldAllowSearch = (q: string): boolean => {
+  const s = q.toLowerCase().trim();
+  if (!s) return false;
+  // Always search for these intents
+  if (hasVisualIntent(s) || hasPlaceIntent(s) || hasNewsIntent(s) || hasShoppingIntent(s)) return true;
+  // Time-sensitive keywords
+  const timeKeywords = ['bugün', 'indi', 'son', 'yeni', 'canlı', 'hava', 'kurs', 'valyuta', 'dəqiq', 'canli'];
+  if (timeKeywords.some(k => s.includes(k))) return true;
+  // Small talk / casual chat should not trigger search
+  const smallTalk = ['salam', 'necəsən', 'necesen', 'adın nədir', 'sən kimsən', 'təşəkkür', 'sağ ol', 'saq ol', 'nə var nə yox'];
+  if (smallTalk.some(k => s.includes(k))) return false;
+  // Default: allow search for most queries to ensure fresh, grounded answers
+  return true;
+};
+
+const getPreferredNewsLocale = (): { hl: string, gl: string } => {
+    // This can be expanded with user settings
+    const { hl, gl } = detectLocaleForSearch();
+    // Prioritize AZ, TR, RU, then fallback
+    if (gl.toLowerCase() === 'az') return { hl: 'az', gl: 'az' };
+    if (gl.toLowerCase() === 'tr') return { hl: 'tr', gl: 'tr' };
+    if (gl.toLowerCase() === 'ru') return { hl: 'ru', gl: 'ru' };
+    return { hl, gl };
+};
+
+const App: React.FC = () => {
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const saved = localStorage.getItem('nov-era-chat-history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isLoading, setIsLoading] = useState(false);
+  const [isAppReady, setIsAppReady] = useState(false);
+  const [activeView, setActiveView] = useState<AppView>('search');
+  const [searchMode, setSearchMode] = useState<SearchMode>(() => {
+    try {
+      const saved = localStorage.getItem('nov-era-search-mode') as SearchMode | null;
+      return saved === 'universe' ? 'universe' : 'base';
+    } catch { return 'base'; }
+  });
+  
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try {
+      const savedSettings = localStorage.getItem('gemini-insight-settings');
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        return { noveraColor: '#000000', ...parsed };
+      }
+    } catch (error) {
+      console.error("Could not parse saved settings:", error);
+    }
+    return {
+      voiceEnabled: true,
+      voiceId: AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ',
+      theme: 'novera',
+      noveraColor: '#000000',
+    };
+  });
+  
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [isVoiceOverlayOpen, setIsVoiceOverlayOpen] = useState(false);
+  const [liveVocalResponse, setLiveVocalResponse] = useState<{ id: string; text: string; } | null>(null);
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const [vocalAudioQueue, setVocalAudioQueue] = useState<string[]>([]);
+  const [isVocalPlayback, setIsVocalPlayback] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null); // For image uploads
+  const sentenceQueueRef = useRef<string[]>([]);
+  const isProcessingSentencesRef = useRef(false);
+  const currentPlayingMessageIdRef = useRef<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const sentenceAudioCacheRef = useRef<Record<string, string | null>>({});
+  const saveTimerRef = useRef<number | null>(null);
+
+  const addMessage = useCallback((message: Omit<Message, 'id'>) => {
+    setMessages(prev => [...prev, { ...message, id: Date.now().toString() }]);
+  }, []);
+
+  const { executeToolCalls } = useDeviceTools(addMessage);
+
+  useEffect(() => {
+    // Simulate app loading
+    const timer = setTimeout(() => {
+      setIsAppReady(true);
+      const loadingScreen = document.getElementById('loading-screen');
+      if (loadingScreen) {
+        loadingScreen.classList.add('hidden');
+      }
+    }, 800); // Faster initial loading
+    return () => clearTimeout(timer);
+  }, []);
+  
+  useEffect(() => {
+    try {
+      localStorage.setItem('gemini-insight-settings', JSON.stringify(settings));
+      document.body.className = `theme-${settings.theme} font-sans`;
+    } catch (error) {
+      console.error("Could not save settings:", error);
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    try { localStorage.setItem('nov-era-search-mode', searchMode); } catch {}
+  }, [searchMode]);
+
+  useEffect(() => {
+    try {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      // keep storage light: persist only latest 200 messages
+      const snapshot = messages.slice(-200);
+      saveTimerRef.current = window.setTimeout(() => {
+        try { localStorage.setItem('nov-era-chat-history', JSON.stringify(snapshot)); } catch {}
+        saveTimerRef.current = null;
+      }, 250); // debounce to avoid thrashing
+    } catch {}
+  }, [messages]);
+  // React to external clear requests (e.g., Sidebar's "Hamısını Sil")
+  useEffect(() => {
+    const onChatCleared = () => {
+      try {
+        if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+        localStorage.removeItem('nov-era-chat-history');
+      } catch {}
+      setMessages([]);
+      setActiveView('search');
+    };
+    window.addEventListener('nov-era-chat-cleared' as any, onChatCleared as any);
+    return () => window.removeEventListener('nov-era-chat-cleared' as any, onChatCleared as any);
+  }, []);
+  const base64Image = e.target?.result as string;
+  const query = "Bu şəkli analiz et.";
+  handleSend(query, [base64Image]);
+};
+reader.readAsDataURL(file);
+}
+};
+
+const stopPlayback = useCallback(() => {
+try {
+if (audioRef.current) {
+  audioRef.current.pause();
+  audioRef.current.src = '';
+}
+} catch {}
+setPlayingMessageId(null);
+currentPlayingMessageIdRef.current = null;
+sentenceQueueRef.current = [];
+isProcessingSentencesRef.current = false;
+}, []);
+
+const processVocalStream = useCallback(async () => {
+if (isProcessingSentencesRef.current) return;
+if (!audioRef.current) return;
+if (!sentenceQueueRef.current.length) return;
+
+isProcessingSentencesRef.current = true;
+try {
+while (sentenceQueueRef.current.length > 0) {
+  const sentence = sentenceQueueRef.current.shift();
+  if (!sentence) continue;
+
+  try {
+    const audioUrl = await textToSpeech(sentence, settings.voiceId);
+    await new Promise<void>((resolve) => {
+      if (!audioRef.current) return resolve();
+      const el = audioRef.current;
+      el.onended = () => resolve();
+      el.onerror = () => resolve();
+      el.src = audioUrl;
+      el.play().catch(() => resolve());
+    });
+  } catch {
+    // davam et
+  }
+}
+} finally {
+isProcessingSentencesRef.current = false;
+}
+}, [settings.voiceId]);
+
+const handlePlayAudio = async (messageId: string, text: string) => {
+try {
+setPlayingMessageId(messageId);
+const audioUrl = await textToSpeech(text, settings.voiceId);
+if (audioRef.current) {
+  audioRef.current.src = audioUrl;
+  await audioRef.current.play();
+}
+} catch (e: any) {
+setMessages(prev => prev.map(m => m.id === messageId ? { ...m, ttsError: "Səsi səsləndirmək alınmadı." } : m));
+setPlayingMessageId(null);
+}
+};
+
+const handleCloseVoiceOverlay = () => {
+setIsVoiceOverlayOpen(false);
+setLiveVocalResponse(null);
+stopPlayback();
+};
+
+const handleScroll = (event: React.UIEvent<HTMLElement>) => {
+setScrollOffset(event.currentTarget.scrollTop);
+};
+
+const scrollToBottom = () => {
+try { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); } catch {}
+};
+
+useEffect(() => {
+scrollToBottom();
+}, [messages, isLoading]);
+
+const renderView = () => {
+switch (activeView) {
+case 'google-search':
+  return <GoogleSearchView />;
+case 'news':
+  return <News />;
+case 'weather':
+  return <Weather />;
+case 'translate':
+  return <Translate />;
+case 'profile':
+  return <Profile />;
+case 'settings':
+  return <Settings settings={settings} onSettingsChange={setSettings} themeColor={THEMES.find(t => t.id === settings.theme)?.colors[2]} />;
+case 'search':
+default:
+  return (
+    <div className="flex flex-col h-full bg-bg-jet/80 backdrop-blur-sm">
+      <main className="flex-grow overflow-y-auto" onScroll={handleScroll}>
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center px-4">
+            <Logo isLarge={true} className="mb-4" />
+            <h1 className="text-4xl font-bold text-text-main">Bu gün sizə necə kömək edə bilərəm?</h1>
+          </div>
+        ) : (
+          <div>
+            {messages.map(msg => (
+              <MessageDisplay
+                key={msg.id}
+                message={msg}
+                onRelatedQuery={(q) => handleSend(q)}
+                onPlayAudio={handlePlayAudio}
+                playingMessageId={playingMessageId}
+              />
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+        )}
+      </main>
+      <footer className="bg-transparent pt-2">
+        <SearchBar
+          onSend={(q) => handleSend(q)}
+          isLoading={isLoading}
+          onVoiceClick={() => setIsVoiceOverlayOpen(true)}
+          searchMode={searchMode}
+          onChangeMode={setSearchMode}
+        />
+        <p className="text-center text-xs text-text-sub pb-3">
+          NovEra səhv edə bilər. Vacib məlumatları yoxlamağınız tövsiyə olunur.
+        </p>
+      </footer>
+    </div>
+  );
+}
+};
+
+return (
+<div className="h-screen w-full flex flex-col bg-bg-jet">
+{renderView()}
+<audio ref={audioRef} hidden />
+</div>
+);
+};
+
+export default App;

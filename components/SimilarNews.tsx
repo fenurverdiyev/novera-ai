@@ -1,6 +1,6 @@
 import React from 'react';
 import type { NewsArticle } from '../types';
-import { findSimilarNews } from '../services/newsService';
+import { findSimilarNews } from '../services/newsService2';
 import { NewsCard } from './NewsCard';
 
 interface SimilarNewsProps {

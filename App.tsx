@@ -831,13 +831,29 @@ const App: React.FC = () => {
   };
 
   const refineVisualQuery = (query: string, history: Message[]): string => {
+    // If query already contains a concrete proper noun (brand/model/person), keep it as-is
     if (containsProperNoun(query)) return query;
-    const generic = /(şəkil(lərini)?|sekil(lerini)?|foto(larını)?|fotolar|görüntü|image|images|pictures|pics|video(larını)?|videolar|göstər|goster|çıxart|cixart|onu|onun)/i.test(query);
+
+    const isVideo = /(\bvideo(larını)?|\bvideolar|youtube)/i.test(query);
+    const isImage = /(şəkil(lərini)?|sekil(lerini)?|foto(larını)?|fotolar|görüntü|image|images|pictures|pics|wallpaper|background)/i.test(query);
+    const generic = isVideo || isImage || /(göstər|goster|çıxart|cixart|onu|onun)/i.test(query);
     if (!generic) return query;
-    const subject = extractSubjectFromHistory(history);
+
+    // Prefer subject from recent history
+    let subject = extractSubjectFromHistory(history);
+
+    // If not found, try to derive subject from current query by stripping generic tokens
+    if (!subject) {
+      const stripped = query
+        .replace(/\b(şəkil(lərini)?|sekil(lerini)?|foto(larını)?|fotolar|görüntü|image|images|pictures|pics|video(larını)?|videolar|göstər|goster|çıxart|cixart|onu|onun|wallpaper|background)\b/gi, '')
+        .trim();
+      if (stripped.length > 0) subject = stripped;
+    }
+
     if (!subject) return query;
-    if (/video|videolar/i.test(query)) return `${subject} videoları`;
-    if (/şəkil|sekil|foto|fotolar|image|images|pictures|pics/i.test(query)) return `${subject} şəkilləri`;
+
+    if (isVideo) return `${subject} videoları`;
+    if (isImage) return `${subject} şəkilləri hd`;
     return subject;
   };
 

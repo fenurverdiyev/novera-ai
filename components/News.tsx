@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchNews } from '../services/newsService';
+import { fetchNews } from '../services/newsService2';
 import type { NewsArticle } from '../types';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { NewsScreen } from './NewsScreen';
