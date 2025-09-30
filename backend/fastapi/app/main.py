@@ -29,9 +29,21 @@ DEFAULT_SPEAKER_ID = os.getenv("DEFAULT_SPEAKER_ID", "")
 LOVO_BASE = os.getenv("LOVO_BASE", "https://api.genny.lovo.ai/api/v1")
 
 if not LOVO_API_KEY:
-    raise RuntimeError("LOVO_API_KEY is not set. Put it in backend/fastapi/.env or environment.")
+    print("Warning: LOVO_API_KEY is not set. TTS endpoints will be disabled until configured.")
 
-app = FastAPI(title="NovEra TTS Backend (LOVO)", version="1.0.0")
+# Gemini API (prefer dedicated translate key, fallback to generic)
+TRANSLATE_API_KEY = os.getenv("GEMINI_TRANSLATE_API_KEY") or os.getenv("GEMINI_API_KEY")
+if TRANSLATE_API_KEY:
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=TRANSLATE_API_KEY)
+    except ImportError:
+        print("Warning: google-generativeai is not installed. Translate endpoint will not work.")
+        TRANSLATE_API_KEY = None  # Disable feature
+else:
+    print("Warning: GEMINI_TRANSLATE_API_KEY/GEMINI_API_KEY is not set. Translate endpoint will not work.")
+
+app = FastAPI(title="NovEra Backend", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,6 +52,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class TranslateRequest(BaseModel):
+    text: str
+    target_language: str
+    source_language: Optional[str] = None
 
 
 class TTSRequest(BaseModel):
@@ -95,6 +113,8 @@ async def lovo_tts_bytes(*, text: str, speaker_id: str, poll_timeout: float = 60
 
 @app.post("/api/tts")
 async def tts(req: TTSRequest, format: str = Query("binary", pattern="^(binary|base64)$")):
+    if not LOVO_API_KEY:
+        raise HTTPException(status_code=503, detail="TTS service is not configured on the server.")
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="'text' is required")
@@ -117,6 +137,8 @@ async def tts_stream(
     text: str = Query(..., description="Text to synthesize"),
     voice_id: Optional[str] = Query(None),
 ):
+    if not LOVO_API_KEY:
+        raise HTTPException(status_code=503, detail="TTS service is not configured on the server.")
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="'text' is required")
@@ -181,3 +203,33 @@ async def list_voices():
         if recommended:
             payload["recommended"] = recommended
         return payload
+
+
+@app.post("/api/translate")
+async def translate(req: TranslateRequest):
+    """Translate text using Gemini API."""
+    if not TRANSLATE_API_KEY:
+        raise HTTPException(status_code=503, detail="Translate service is not configured on the server.")
+
+    if not (req.text or "").strip():
+        raise HTTPException(status_code=400, detail="'text' is required")
+    if not (req.target_language or "").strip():
+        raise HTTPException(status_code=400, detail="'target_language' is required")
+
+    try:
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        source_lang_instruction = f"from {req.source_language}" if req.source_language else "from the auto-detected language"
+        prompt = (
+            f"Translate the following text to {req.target_language} {source_lang_instruction}. "
+            "Only return the translated text, without any additional explanations or context.\n\n"
+            f"Text: '''{req.text}'''"
+        )
+
+        # Run the sync call off the event loop to avoid blocking
+        response = await asyncio.to_thread(model.generate_content, prompt)
+        translated_text = (response.text or "").strip()
+        return JSONResponse({"translated_text": translated_text})
+
+    except Exception as e:
+        print(f"Gemini translation error: {e}")
+        raise HTTPException(status_code=502, detail="Failed to translate text with Gemini API.")

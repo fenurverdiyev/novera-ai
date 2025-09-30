@@ -2,7 +2,7 @@
 export const config = { runtime: 'edge' };
 
 interface ProxyRequestBody {
-  type: 'search' | 'images' | 'videos' | 'news' | 'places' | 'suggest';
+  type: 'search' | 'images' | 'videos' | 'news' | 'places' | 'suggest' | 'autocomplete' | 'shopping';
   q: string;
   num?: number;
   gl?: string;
@@ -42,7 +42,9 @@ export default async function handler(request: Request) {
       case 'videos': endpoint = '/videos'; break;
       case 'news': endpoint = '/news'; break;
       case 'places': endpoint = '/places'; break;
-      case 'suggest': endpoint = '/suggest'; break;
+      case 'shopping': endpoint = '/shopping'; break;
+      case 'autocomplete': endpoint = '/autocomplete'; break; // Serper autocomplete endpoint
+      case 'suggest': endpoint = '/suggest'; break; // backward compatibility if used elsewhere
       case 'search': default: endpoint = '/search'; break;
     }
 

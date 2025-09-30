@@ -66,20 +66,17 @@ export const NewsArticle: React.FC<NewsArticleProps> = ({ article, allArticles, 
         </button>
 
         <article>
-          <span className="text-sm font-bold uppercase text-accent">{article.category}</span>
           <h1 className="text-3xl md:text-5xl font-bold my-3 leading-tight">{displayTitle}</h1>
           <div className="text-text-sub text-sm mb-6">
             <span>{article.source} tərəfindən</span> &middot; <span>{formattedDate}</span>
           </div>
 
-          <ProtectedImage src={article.imageUrl} alt={article.title} className="w-full h-auto max-h-[500px] object-cover rounded-xl my-8" />
-          
-          {translationError && (
-              <div className="my-4 p-4 bg-red-900/50 border border-red-700 rounded-lg flex items-center gap-3">
-                  <AlertTriangleIcon className="w-5 h-5 text-red-400" />
-                  <span className="text-red-400">{translationError}</span>
-              </div>
-          )}
+          <ProtectedImage
+            src={article.imageUrl}
+            alt={article.title}
+            className="w-full h-auto max-h-[500px] object-cover rounded-xl my-8"
+            proxyParams="w=1280&h=720&fit=cover&output=webp&q=85"
+          />
 
           <div className="prose prose-invert max-w-none text-text-main leading-relaxed">
              { displayBody && <div dangerouslySetInnerHTML={{ __html: displayBody.replace(/\n/g, '<br />') }} />}

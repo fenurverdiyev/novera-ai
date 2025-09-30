@@ -16,7 +16,7 @@ export interface Message {
   images?: string[];
   videos?: string[];
   places?: PlaceResult[];
-  news?: SearchNewsItem[];
+  news?: NewsArticle[];
   products?: ShoppingProduct[];
   sources?: Source[];
   related?: string[];
@@ -32,9 +32,6 @@ export interface SearchNewsItem {
   title: string;
   link: string;
   source: string;
-  date: string;
-  snippet: string;
-  thumbnail?: string;
 }
 
 // Full news article used by News page
@@ -44,10 +41,10 @@ export interface NewsArticle {
   summary: string | null;
   url: string;
   source: string;
-  imageUrl: string | null;
   publishedAt: string;
   content?: string | null;
   category?: string;
+  imageUrl?: string | null;
 }
 
 export interface ShoppingProduct {

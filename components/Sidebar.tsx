@@ -127,9 +127,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
 
         {/* History section under nav */}
         <div className="mt-4 pt-3 border-t border-white/10 px-2">
-          <div className="flex items-center gap-2 px-2 text-xs uppercase tracking-wide text-white/60">
-            <BookmarkIcon className="w-4 h-4" />
-            Keçmiş
+          <div className="flex items-center justify-between px-2">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-white/60">
+              <BookmarkIcon className="w-4 h-4" />
+              Keçmiş
+            </div>
+            <button
+              onClick={() => { try { window.dispatchEvent(new Event('nov-era-clear-all' as any)); } catch {} }}
+              className="text-[11px] px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-white/70 border border-white/10"
+              title="Bütün tarixçəni sil"
+            >
+              Hamısını sil
+            </button>
           </div>
           <div className="mt-2 space-y-1">
             {sessions.slice(0, 8).map(s => (

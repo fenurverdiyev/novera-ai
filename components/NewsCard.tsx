@@ -35,7 +35,12 @@ export const NewsCard: React.FC<NewsCardProps> = ({ article, onSelect, variant =
         className="flex gap-4 p-3 bg-bg-slate/50 rounded-lg hover:bg-bg-onyx transition-colors cursor-pointer"
         style={style}
       >
-        <ProtectedImage src={article.imageUrl} alt={article.title} className="w-24 h-24 object-cover rounded-md flex-shrink-0" />
+        <ProtectedImage
+          src={article.imageUrl}
+          alt={article.title}
+          className="w-24 h-24 object-cover rounded-md flex-shrink-0"
+          proxyParams="w=512&h=512&fit=cover&output=webp&q=90"
+        />
         <div className="flex flex-col">
           <h3 className="text-md font-semibold text-text-main line-clamp-3">{article.title}</h3>
           <p className="text-xs text-text-sub mt-auto">{article.source} &middot; {timeAgo(article.publishedAt)}</p>
@@ -51,12 +56,18 @@ export const NewsCard: React.FC<NewsCardProps> = ({ article, onSelect, variant =
       style={style}
     >
       <div className="relative">
-        <ProtectedImage src={article.imageUrl} alt={article.title} className="w-full h-56 object-cover" />
+        <ProtectedImage
+          src={article.imageUrl}
+          alt={article.title}
+          className="w-full h-56 object-cover"
+          proxyParams="w=1280&h=720&fit=cover&output=webp&q=90"
+        />
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
         <div className="absolute bottom-0 left-0 p-4">
           <span className="px-2 py-1 bg-accent/80 text-bg-jet text-xs font-bold rounded capitalize">{article.category}</span>
         </div>
       </div>
+
       <div className="p-5">
         <h2 className="text-xl font-bold text-text-main mb-2 line-clamp-2 group-hover:text-accent transition-colors">{article.title}</h2>
         <p className="text-text-sub text-sm mb-4 line-clamp-3">{article.summary}</p>

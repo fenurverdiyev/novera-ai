@@ -1,0 +1,10 @@
+[33m40e7ec6[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mrestore-40e7ec6[m[33m, [m[1;32mmain[m[33m)[m Tam düzgün və yenilənmiş yep yeni versiya: bütün dəyişikliklər saxlanıldı
+[33ma49f4aa[m Tam düzgün və yenilənmiş versiya: bütün dəyişikliklər saxlanıldı
+[33m9c216f1[m Final stabil versiya: bütün fayllar düzgün işləyir
+[33m49ee049[m feat(ui): polish summer & electric themes; add rainstorm theme; add profile section
+[33mc541a5b[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m feat(search): restore serper proxy + proxy-first service (from reflog)
+[33m445b8e7[m[33m ([m[1;33mtag: [m[1;33mbackup-before-revert[m[33m, [m[1;32mrecovery[m[33m)[m Dəyişiklikləri yadda saxladım
+[33mf6bceae[m ui fix
+[33m9d85c26[m fix
+[33m0cce682[m feat: Initialize NovEra project structure
+[33m4684d8d[m Initial commit

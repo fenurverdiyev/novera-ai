@@ -3,6 +3,7 @@ import { searchNews as serperSearchNews } from './searchService';
 
 const GNEWS_API_KEY = import.meta.env.VITE_GNEWS_API_KEY as string | undefined;
 const NEWSDATA_API_KEYS = import.meta.env.VITE_NEWSDATA_API_KEYS as string | undefined;
+const NEWSDATA_API_KEY = import.meta.env.VITE_NEWSDATA_API_KEY as string | undefined;
 
 // Category maps
 const gnewsCategoryMap: { [key: string]: string } = {
@@ -101,10 +102,20 @@ const fetchGNews = async (category: string, language: string, country: string | 
   }
 };
 
-// Parse NewsData.io keys from env (comma/semicolon/newline separated)
+// Parse NewsData.io keys from env
+// Supports:
+// - VITE_NEWSDATA_API_KEYS: comma/semicolon/newline separated list
+// - VITE_NEWSDATA_API_KEY: single key
 const getNewsDataKeys = (): string[] => {
-  if (!NEWSDATA_API_KEYS) return [];
-  return NEWSDATA_API_KEYS.split(/[;,\n]+/).map(s => s.trim()).filter(Boolean);
+  const keys: string[] = [];
+  if (NEWSDATA_API_KEYS) {
+    keys.push(...NEWSDATA_API_KEYS.split(/[;,\n]+/).map(s => s.trim()).filter(Boolean));
+  }
+  if (NEWSDATA_API_KEY) {
+    keys.push(NEWSDATA_API_KEY.trim());
+  }
+  // De-duplicate
+  return Array.from(new Set(keys.filter(Boolean)));
 };
 
 const newsDataCategoryMap: { [key: string]: string } = {

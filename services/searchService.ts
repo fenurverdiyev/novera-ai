@@ -1,4 +1,5 @@
-import type { PlaceResult, SearchNewsItem, ShoppingProduct } from '../types';
+import type { PlaceResult, NewsArticle, ShoppingProduct } from '../types';
+import { fetchNewsFromNewsData } from './newsDataService';
 
 // Optional Google CSE fallback (BrowserView already uses these)
 const CSE_KEY = import.meta.env.VITE_GOOGLE_CSE_JSON_KEY as string | undefined;
@@ -9,6 +10,8 @@ const SERPER_API_KEY = import.meta.env.VITE_SERPER_API_KEY;
 const SERPER_TIMEOUT_MS = 8000; // abort slow requests to keep UI responsive
 const SERPER_CACHE_TTL_MS = 180000; // 3 minutes cache TTL
 const serperCache = new Map<string, { data: any; expires: number }>();
+// De-duplicate concurrent requests for the same key
+const inflight = new Map<string, Promise<any>>();
 const cacheKey = (
   endpoint: string,
   query: string,
@@ -16,6 +19,44 @@ const cacheKey = (
   opts: { gl?: string; hl?: string } = {}
 ) => `${endpoint}::${query}::${num}::${opts.gl || ''}::${opts.hl || ''}`;
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+// Basic safety filters to avoid NSFW/suspicious links
+const blockedHostPatterns = [
+  /porn/i, /adult/i, /nsfw/i, /redtube/i, /xvideos/i, /xnxx/i, /pornhub/i,
+];
+const allowedVideoHosts = [
+  'www.youtube.com', 'youtube.com', 'm.youtube.com', 'youtu.be', 'vimeo.com', 'www.vimeo.com', 'www.dailymotion.com', 'dailymotion.com'
+];
+
+function isSafeImageUrl(u: string): boolean {
+  try {
+    const url = new URL(u);
+    if (url.protocol !== 'https:') return false;
+    if (blockedHostPatterns.some(re => re.test(url.hostname))) return false;
+    // allow common image extensions or known hosts
+    const okExt = /(\.jpg|\.jpeg|\.png|\.webp|\.gif)(\?|#|$)/i.test(url.pathname);
+    const knownHost = /googleusercontent|gstatic|wikimedia|wikipedia|imgur|pinimg|twimg|ggpht\.com|fbcdn\.net/i.test(url.hostname);
+    return okExt || knownHost;
+  } catch {
+    return false;
+  }
+}
+
+function isSafeVideoUrl(u: string): boolean {
+  try {
+    const url = new URL(u);
+    if (url.protocol !== 'https:') return false;
+    if (blockedHostPatterns.some(re => re.test(url.hostname))) return false;
+    // Prefer well-known video hosts
+    if (allowedVideoHosts.includes(url.hostname)) return true;
+    // Otherwise, allow if it looks like a direct mp4/m3u8 link from reputable CDNs
+    const okExt = /(\.mp4|\.webm|\.m3u8)(\?|#|$)/i.test(url.pathname);
+    const knownCdn = /cdn|akamai|cloudfront|googlevideo|fbcdn/i.test(url.hostname);
+    return okExt && knownCdn;
+  } catch {
+    return false;
+  }
+}
 
 // Helper to call Serper API to avoid repetition
 async function callSerperApi(
@@ -57,47 +98,61 @@ async function callSerperApi(
     }
   };
 
-  let lastErr: any = null;
-  const attempts = SERPER_API_KEY ? 2 : 0; // only attempt direct calls if key exists
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try {
-      const data = await attemptFetch();
-      serperCache.set(key, { data, expires: now + SERPER_CACHE_TTL_MS });
-      return data;
-    } catch (e) {
-      lastErr = e;
-      if (attempt === 0) await sleep(400);
-    }
+  // De-duplicate concurrent requests
+  if (inflight.has(key)) {
+    return inflight.get(key);
   }
-  console.error(`Serper ${endpoint} API error:`, lastErr);
-  // Fallback: try serverless proxy routes (Vercel/Netlify) to bypass CORS or mask key
-  const proxyBody = {
-    type: endpoint,
-    q: query,
-    num,
-    ...(opts.gl ? { gl: opts.gl.toLowerCase() } : {}),
-    ...(opts.hl ? { hl: opts.hl.toLowerCase() } : {}),
-  } as any;
-  const proxyEndpoints = [
-    '/api/serper-proxy',
-    '/functions/serper-proxy',
-    '/.netlify/functions/serper-proxy',
-  ];
-  for (const url of proxyEndpoints) {
-    try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(proxyBody),
-      });
-      if (r.ok) {
-        const data = await r.json();
+
+  const p = (async () => {
+    let lastErr: any = null;
+    const attempts = SERPER_API_KEY ? 2 : 0; // only attempt direct calls if key exists
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        const data = await attemptFetch();
         serperCache.set(key, { data, expires: now + SERPER_CACHE_TTL_MS });
         return data;
+      } catch (e) {
+        lastErr = e;
+        if (attempt === 0) await sleep(400);
       }
-    } catch {}
+    }
+    console.error(`Serper ${endpoint} API error:`, lastErr);
+    // Fallback: try serverless proxy routes (Vercel/Netlify) to bypass CORS or mask key
+    const proxyBody = {
+      type: endpoint,
+      q: query,
+      num,
+      ...(opts.gl ? { gl: opts.gl.toLowerCase() } : {}),
+      ...(opts.hl ? { hl: opts.hl.toLowerCase() } : {}),
+    } as any;
+    const proxyEndpoints = [
+      '/api/serper-proxy',
+      '/functions/serper-proxy',
+      '/.netlify/functions/serper-proxy',
+    ];
+    for (const url of proxyEndpoints) {
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(proxyBody),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          serperCache.set(key, { data, expires: now + SERPER_CACHE_TTL_MS });
+          return data;
+        }
+      } catch {}
+    }
+    return null;
+  })();
+
+  inflight.set(key, p);
+  try {
+    return await p;
+  } finally {
+    inflight.delete(key);
   }
-  return null;
 }
 
 export function detectLocaleForSearch(): { hl: string; gl: string } {
@@ -185,10 +240,10 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
 
   let images = Array.from(new Set(
     imageItems.map((img: any) => img.imageUrl || img.image || img.thumbnail || img.link).filter(Boolean)
-  ));
+  )).filter(isSafeImageUrl);
   let videos = Array.from(new Set(
     videoItems.map((vid: any) => vid.link || vid.videoUrl || vid.url).filter(Boolean)
-  ));
+  )).filter(isSafeVideoUrl);
 
   // Fallback: try general search endpoint to harvest images/videos if empty
   if (images.length === 0 || videos.length === 0) {
@@ -200,14 +255,14 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
           const altImageUrls = Array.from(new Set(
             (altImgs || []).map((img: any) => img.imageUrl || img.image || img.thumbnail || img.link).filter(Boolean)
           ));
-          if (altImageUrls.length) images = altImageUrls.slice(0, maxImages);
+          if (altImageUrls.length) images = altImageUrls.filter(isSafeImageUrl).slice(0, maxImages);
         }
         if (videos.length === 0) {
           const altVids: any[] = (alt.videos || alt.video_results || alt.inlineVideos || alt.inline_videos || []);
           const altVideoUrls = Array.from(new Set(
             (altVids || []).map((vid: any) => vid.link || vid.videoUrl || vid.url).filter(Boolean)
           ));
-          if (altVideoUrls.length) videos = altVideoUrls.slice(0, maxVideos);
+          if (altVideoUrls.length) videos = altVideoUrls.filter(isSafeVideoUrl).slice(0, maxVideos);
         }
       }
     } catch {}
@@ -223,7 +278,7 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
       const resp = await fetch(url);
       const data = await resp.json();
       const items: any[] = data.items || [];
-      const cseImages = items.map((it: any) => it.link || it.image?.thumbnailLink || it.pagemap?.cse_image?.[0]?.src).filter(Boolean);
+      const cseImages = items.map((it: any) => it.link || it.image?.thumbnailLink || it.pagemap?.cse_image?.[0]?.src).filter(Boolean).filter(isSafeImageUrl);
       if (cseImages.length) {
         const merged = new Set<string>([...images, ...cseImages]);
         images = Array.from(merged).slice(0, maxImages);
@@ -237,7 +292,7 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
       const resp = await fetch(url);
       const data = await resp.json();
       const items: any[] = data.items || [];
-      const cseVideos = items.map((it: any) => it.link || it.formattedUrl || it.pagemap?.videoobject?.[0]?.url).filter(Boolean);
+      const cseVideos = items.map((it: any) => it.link || it.formattedUrl || it.pagemap?.videoobject?.[0]?.url).filter(Boolean).filter(isSafeVideoUrl);
       if (cseVideos.length) {
         const merged = new Set<string>([...videos, ...cseVideos]);
         videos = Array.from(merged).slice(0, maxVideos);
@@ -264,27 +319,41 @@ export async function searchPlaces(query: string, num = 8, opts?: { gl?: string;
   }));
 }
 
-export const searchNews = async (query: string, num = 10, opts?: { hl?: string; gl?: string }): Promise<SearchNewsItem[]> => {
+export const searchNews = async (query: string, num = 10, opts?: { hl?: string; gl?: string }): Promise<NewsArticle[]> => {
+  const newsDataPromise = fetchNewsFromNewsData(query, { lang: opts?.hl, country: opts?.gl });
   const loc = detectLocaleForSearch();
   const hl = opts?.hl ?? loc.hl;
   const gl = opts?.gl ?? loc.gl;
   try {
-    const data = await callSerperApi('news', query, num, { hl, gl });
-    const items: any[] = data?.news || data?.news_results || data?.newsResults || [];
-    return items.map((item: any) => ({
+    const serperData = await callSerperApi('news', query, num, { hl, gl });
+    const serperItems: any[] = serperData?.news || serperData?.news_results || serperData?.newsResults || [];
+    const serperArticles: NewsArticle[] = serperItems.map((item: any) => ({
+      id: item.link || item.title,
       title: item.title,
-      link: item.link,
+      url: item.link,
       source: item.source || item.source_name || item.source?.name || '',
-      date: item.date || item.datePublished || item.time || '',
-      snippet: item.snippet || item.content || item.summary || '',
-      thumbnail: item.thumbnail || item.imageUrl || item.image,
+      publishedAt: item.date || item.datePublished || item.time || new Date().toISOString(),
+      summary: item.snippet || item.content || item.summary || '',
+      imageUrl: item.thumbnail || item.imageUrl || item.image,
+      category: 'general',
     }));
+
+    const newsDataArticles = await fetchNewsFromNewsData(query, { lang: hl, country: gl });
+    const combined = [...serperArticles, ...newsDataArticles];
+    const unique = Array.from(new Map(combined.map(item => [item.url, item])).values());
+        return unique.slice(0, num);
   } catch (e) {
     console.error('Serper news failed:', e);
-    return [];
+    // In case of Serper failure, still try to return NewsData results
+    try {
+      const newsDataArticles = await newsDataPromise;
+      return newsDataArticles.slice(0, num);
+    } catch (e2) {
+      console.error('NewsData fallback failed:', e2);
+      return [];
+    }
   }
 };
-
 export const searchShopping = async (query: string, num = 10): Promise<ShoppingProduct[]> => {
   const { hl, gl } = detectLocaleForSearch();
   try {

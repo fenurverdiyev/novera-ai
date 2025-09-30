@@ -3,6 +3,7 @@ import type { Message, PlaceResult, SearchNewsItem, ShoppingProduct } from '../t
 import { BotIcon, UserIcon, PlayIcon, PauseIcon } from './Icons';
 import { SourcePill } from './SourcePill';
 import { RelatedQuery } from './RelatedQuery';
+import { ProtectedImage } from './ProtectedImage';
 
 interface MessageDisplayProps {
   message: Message;
@@ -39,26 +40,24 @@ const formatText = (text: string) => {
               </a>
             );
           }
-          
           const boldParts = part.split(boldRegex);
-          return boldParts.map((boldPart, boldIndex) => {
-             if (boldIndex % 2 === 1) {
-                return <strong key={`${lineIndex}-${partIndex}-${boldIndex}`}>{boldPart}</strong>
-             }
-             return <React.Fragment key={`${lineIndex}-${partIndex}-${boldIndex}`}>{boldPart}</React.Fragment>;
+          return boldParts.map((bp, bidx) => {
+            if (bidx % 2 === 1) {
+              return <strong key={`${lineIndex}-${partIndex}-${bidx}`}>{bp}</strong>;
+            }
+            return <React.Fragment key={`${lineIndex}-${partIndex}-${bidx}`}>{bp}</React.Fragment>;
           });
         })}
       </p>
     );
   });
 };
-
 const Stepper: React.FC<{ step?: 1 | 2 | 3 }> = ({ step }) => {
   const steps = [
-    { id: 1, label: 'Analiz Edirəm...' },
+    { id: 1, label: 'Analiz edirəm...' },
     { id: 2, label: 'Axtarıram...' },
-    { id: 3, label: 'Cavab Verirəm' },
-  ] as const;
+    { id: 3, label: 'Təqdim edirəm...' },
+  ];
   return (
     <div className="mb-3">
       <div className="flex items-center gap-3">
@@ -199,14 +198,22 @@ const PlaceCard: React.FC<{ place: PlaceResult }> = ({ place }) => {
 };
 
 const NewsCard: React.FC<{ article: SearchNewsItem }> = ({ article }) => {
+  const hasThumb = !!article.thumbnail;
   return (
     <a href={article.link} target="_blank" rel="noopener noreferrer" className="block rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors">
       <div className="flex items-start gap-4">
-        {article.thumbnail && (
-          <img src={article.thumbnail} alt={article.title} className="w-24 h-24 rounded-lg object-cover" />
+        {hasThumb && (
+          <div className="w-32 h-24 rounded-lg overflow-hidden bg-bg-onyx flex-shrink-0">
+            <ProtectedImage
+              src={article.thumbnail}
+              alt={article.title}
+              className="w-full h-full object-cover"
+              proxyParams="w=480&h=320&fit=cover&output=webp&q=85"
+            />
+          </div>
         )}
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-white leading-tight">{article.title}</div>
+          <div className="font-semibold text-white leading-tight line-clamp-2">{article.title}</div>
           <div className="text-xs text-white/70 mt-2">{article.source} • {article.date}</div>
           <p className="text-sm text-white/80 mt-2 line-clamp-2">{article.snippet}</p>
         </div>
@@ -231,7 +238,12 @@ const ProductCard: React.FC<{ product: ShoppingProduct }> = ({ product }) => {
     <a href={href} target="_blank" rel="noopener noreferrer" className="block rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors">
         {product.imageUrl && (
           <div className="aspect-square w-full bg-white/10 rounded-lg mb-3 overflow-hidden">
-            <img src={product.imageUrl} alt={product.title} className="w-full h-full object-contain" />
+            <ProtectedImage
+              src={product.imageUrl}
+              alt={product.title}
+              className="w-full h-full object-contain"
+              proxyParams="w=512&h=512&fit=contain&output=webp&q=85"
+            />
           </div>
         )}
         <div className="font-semibold text-white leading-tight line-clamp-2">{product.title}</div>

@@ -1,138 +1,35 @@
 // Fix: The `FunctionDeclarationTool` type does not exist in `@google/genai`. It has been replaced with the correct `Tool` type.
 import { GoogleGenAI, Type, Content, Tool } from "@google/genai";
 import type { Source, NewsArticle, WeatherData, Message } from '../types';
-import { searchWeb as serperSearchWeb, SerperResponse, detectLocaleForSearch } from './searchService';
+import { detectLocaleForSearch } from './searchService';
+
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const GEMINI_TRANSLATE_API_KEY = import.meta.env.VITE_GEMINI_TRANSLATE_API_KEY;
 
 // Do not crash the app if the API key is missing; degrade gracefully instead
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
-const aiTranslate = GEMINI_TRANSLATE_API_KEY
-  ? new GoogleGenAI({ apiKey: GEMINI_TRANSLATE_API_KEY })
-  : (GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null);
+const BACKEND_URL = (import.meta.env.VITE_TTS_BACKEND_URL || 'http://localhost:8000').replace(/\/$/, '');
 const model = 'gemini-2.5-flash';
 
-// Add new device assistant functions
-// Fix: The type `FunctionDeclarationTool[]` is incorrect and has been replaced with `Tool[]`.
+// Keep only the single tool we actually need at inference-time to reduce prompt size.
 const assistantTools: Tool[] = [
-    {
-      functionDeclarations: [
-        {
-          name: 'makeCall',
-          description: 'Cihazın defolt zəng proqramını istifadə edərək müəyyən bir kontakta telefon zəngi et.',
-          parameters: {
-            type: Type.OBJECT,
-            properties: {
-              contactName: {
-                type: Type.STRING,
-                description: 'Zəng ediləcək şəxsin adı, məsələn, "Fuad".',
-              },
-            },
-            required: ['contactName'],
+  {
+    functionDeclarations: [
+      {
+        name: 'webSearch',
+        description: 'Vebdə şəkil və videoları tapmaq üçün axtarış aparır. Tapılan URL-lər istifadəçiyə göstərilir.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            query: { type: Type.STRING, description: 'Şəkil/video üçün axtarış mətni.' },
+            maxImages: { type: Type.NUMBER, description: 'Maksimum şəkil sayı (default 6).' },
+            maxVideos: { type: Type.NUMBER, description: 'Maksimum video sayı (default 3).' },
           },
+          required: ['query'],
         },
-        {
-          name: 'sendMessage',
-          description: 'Müəyyən bir proqram (SMS, WhatsApp, email) vasitəsilə bir kontakta mesaj göndər.',
-          parameters: {
-            type: Type.OBJECT,
-            properties: {
-              contactName: {
-                type: Type.STRING,
-                description: 'Mesaj göndəriləcək şəxsin adı, məsələn, "Fuad".',
-              },
-              message: {
-                type: Type.STRING,
-                description: 'Mesajın məzmunu.',
-              },
-              service: {
-                type: Type.STRING,
-                description: 'Mesaj göndərmək üçün istifadə ediləcək proqram. Dəstəklənənlər: "sms", "whatsapp", "email".',
-              },
-            },
-            required: ['contactName', 'message', 'service'],
-          },
-        },
-        {
-          name: 'setAlarm',
-          description: 'Cihazda müəyyən bir vaxt və başlıq üçün siqnal (zəngli saat) qur.',
-          parameters: {
-            type: Type.OBJECT,
-            properties: {
-              time: {
-                type: Type.STRING,
-                description: 'Siqnalın qurulacağı vaxt, məsələn, "07:30" və ya "axşam 9".',
-              },
-              label: {
-                type: Type.STRING,
-                description: 'Siqnal üçün etiket və ya ad, məsələn, "İşə getmək".',
-              },
-            },
-            required: ['time'],
-          },
-        },
-        {
-          name: 'addCalendarEvent',
-          description: 'Cihazın təqviminə yeni bir tədbir əlavə et.',
-          parameters: {
-            type: Type.OBJECT,
-            properties: {
-              title: { type: Type.STRING, description: 'Tədbirin adı.' },
-              description: { type: Type.STRING, description: 'Tədbirin təsviri.' },
-              startTime: { type: Type.STRING, description: 'Başlama vaxtı (ISO 8601 formatında və ya anlaşılan dildə).' },
-              endTime: { type: Type.STRING, description: 'Bitmə vaxtı (ISO 8601 formatında və ya anlaşılan dildə).' },
-            },
-            required: ['title', 'startTime'],
-          },
-        },
-        {
-          name: 'addNote',
-          description: 'Cihazın qeyd proqramına yeni bir qeyd əlavə et.',
-          parameters: {
-            type: Type.OBJECT,
-            properties: {
-              content: {
-                type: Type.STRING,
-                description: 'Qeydin məzmunu.',
-              },
-            },
-            required: ['content'],
-          },
-        },
-        {
-          name: 'toggleDevice',
-          description: 'Cihazın funksiyalarını (WiFi, Bluetooth, Fənər) yandırmaq və ya söndürmək.',
-          parameters: {
-            type: Type.OBJECT,
-            properties: {
-              device: {
-                type: Type.STRING,
-                description: 'İdarə ediləcək funksiya. Dəstəklənənlər: "wifi", "bluetooth", "flashlight".',
-              },
-              state: {
-                type: Type.STRING,
-                description: 'Funksiyanın vəziyyəti. Dəstəklənənlər: "on", "off".',
-              },
-            },
-            required: ['device', 'state'],
-          },
-        },
-        {
-          name: 'webSearch',
-          description: 'Vebdə şəkil və videoları tapmaq üçün axtarış aparır. Tapılan URL-lər tətbiqdə istifadəçiyə göstərilir.',
-          parameters: {
-            type: Type.OBJECT,
-            properties: {
-              query: { type: Type.STRING, description: 'Şəkil/video üçün axtarış mətni.' },
-              maxImages: { type: Type.NUMBER, description: 'Maksimum şəkil sayı (default 6).' },
-              maxVideos: { type: Type.NUMBER, description: 'Maksimum video sayı (default 3).' },
-            },
-            required: ['query'],
-          },
-        },
-      ],
-    },
+      },
+    ],
+  },
 ];
 
 /**
@@ -140,6 +37,10 @@ const assistantTools: Tool[] = [
  * @param messages The array of messages from the app state.
  * @returns A Content array for the Gemini API.
  */
+
+// Built-in Google Search Grounding tool
+const googleSearchTool: Tool = { googleSearch: {} as any };
+
 const mapMessagesToContent = (messages: Message[]): Content[] => {
     return messages.map(msg => ({
         role: msg.role,
@@ -152,14 +53,19 @@ export async function* streamChatQuery(
     history: Message[],
     images: string[] = [],
     memory?: string,
+    forceGrounding?: boolean,
 ): AsyncGenerator<{ text?: string; sources?: Source[], images?: string[], videos?: string[], toolCalls?: any[] }> {
     if (!ai) {
         // Graceful fallback when no API key is provided
-        yield { text: 'AI cavabı hazırda aktiv deyil (VITE_GEMINI_API_KEY qurulmayıb). Zəhmət olmasa ayarlarda API açarını əlavə edin.' };
+        yield { text: 'AI cavabД± hazД±rda aktiv deyil (VITE_GEMINI_API_KEY qurulmayД±b). ZЙ™hmЙ™t olmasa ayarlarda API aГ§arД±nД± Й™lavЙ™ edin.' };
         return;
     }
     const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
-    const systemInstruction = `Sən NovEra adlı bir köməkçi assistantsan və bütün cavablarını Azərbaycan dilində verməlisən. Hər cavabın əvvəlində qısa təqdimat ver: 'Mən NovEra-yam — NovEra şirkəti tərəfindən yaradılmış AI köməkçi.' Mətn cavablar üçün yalnız Google Search Grounding alətindən (google_search) istifadə et, iddiaları mənbələrlə dəstəklə. Şəkil, video, məkan və alış-veriş nəticələrini toplamaq SƏNİN VƏZİFƏN DEYİL — bunları tətbiq özü (Serper API) təmin edəcək. Vizual linkləri uydurma və ya özbaşına çıxarma. Mənbələr olduqda cavabın sonunda qısa "Mənbələr" bölməsi göstər.` + memoryBlock;
+    const systemInstruction =
+      "Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver. " +
+      "İstifadəçi vizual (şəkil/video) istəyirsə, MÜTLƏQ `webSearch` alətini çağır və nəticələrin URL-lərini səthə çıxar. " +
+      "Alətdən istifadə etmədən vizual məzmun haqqında şərh vermə." +
+      memoryBlock;
     
     const historicContent = mapMessagesToContent(history);
     
@@ -177,21 +83,48 @@ export async function* streamChatQuery(
 
     const contents: Content[] = [...historicContent, { role: 'user', parts: userParts }];
 
-    const responseStream = await ai.models.generateContentStream({
+    let responseStream: any;
+    try {
+      responseStream = await ai.models.generateContentStream({
         model,
         contents,
         config: {
-            // Only allow official Google Search grounding for text answers
-            tools: ([{ google_search: {} }]) as any,
-            systemInstruction,
+          tools: [googleSearchTool, ...assistantTools],
+          systemInstruction,
         },
-    });
+      });
+    } catch (err) {
+      // Fallback: non-streaming single shot to return something fast and stable
+      try {
+        const fallback = await ai.models.generateContent({
+          model,
+          contents,
+          config: { tools: [googleSearchTool], systemInstruction },
+        });
+        const text = fallback.text?.trim();
+        const groundingChunks = (fallback as any).candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        const seen = new Set<string>();
+        const sources: Source[] = groundingChunks
+          .map((g: any) => g?.web)
+          .filter((w: any) => w && w.uri)
+          .filter((w: any) => { if (seen.has(w.uri)) return false; seen.add(w.uri); return true; })
+          .slice(0, 8)
+          .map((w: any, i: number) => ({ uri: w.uri, title: w.title || new URL(w.uri).hostname, index: i + 1 }));
+        if (text) {
+          yield { text, sources: sources.length ? sources : undefined };
+          return;
+        }
+      } catch (e2) {
+        yield { text: 'Hazırda cavab generasiyasında problem yaşandı. Zəhmət olmasa bir qədər sonra yenidən cəhd edin.' };
+        return;
+      }
+    }
 
     let sourceIndex = 1;
     const seenUris = new Set<string>();
     
-    const imageRegex = /\[image:\s*(https?:\/\/[^\]]+)\]/g;
-    const videoRegex = /\[video:\s*(https?:\/\/[^\]]+)\]/g;
+    const imageRegex = /\u005Bimage:\s*(https?:\/\/[^\u005D]+)\u005D/g;
+    const videoRegex = /\u005Bvideo:\s*(https?:\/\/[^\u005D]+)\u005D/g;
 
 
     for await (const chunk of responseStream) {
@@ -296,7 +229,7 @@ Return the questions as a JSON array of strings.`;
  * @returns A summary of the article.
  */
 export async function analyzeNewsArticle(article: NewsArticle): Promise<string> {
-    if (!ai) return "AI təhlili hazırda əlçatmazdır. Xahiş edirik sonra yenidən cəhd edin.";
+    if (!ai) return "AI tЙ™hlili hazД±rda Й™lГ§atmazdД±r. XahiЕџ edirik sonra yenidЙ™n cЙ™hd edin.";
     try {
         const prompt = `Please analyze the following news article. Provide a concise, neutral summary covering the key points, any potential biases detected, and the wider implications of the story.
         IMPORTANT: Your entire response MUST be in the Azerbaijani language.
@@ -314,7 +247,7 @@ Return the analysis as a single block of text.`;
         return response.text.trim();
     } catch (error) {
         console.error("Error analyzing news article:", error);
-        return "Məqalə təhlil edilərkən xəta baş verdi.";
+        return "MЙ™qalЙ™ tЙ™hlil edilЙ™rkЙ™n xЙ™ta baЕџ verdi.";
     }
 }
 
@@ -326,7 +259,7 @@ Return the analysis as a single block of text.`;
 export async function getWeather(location: string): Promise<WeatherData> {
     try {
         if (!ai) {
-            throw new Error('AI açarı yoxdur. Hava məlumatı üçün Open-Meteo modulundan istifadə edin.');
+            throw new Error('AI aГ§arД± yoxdur. Hava mЙ™lumatД± ГјГ§Гјn Open-Meteo modulundan istifadЙ™ edin.');
         }
         const response = await ai.models.generateContent({
             model,
@@ -335,7 +268,7 @@ export async function getWeather(location: string): Promise<WeatherData> {
             Return the result as a single, valid JSON object.
             If the location is found, the JSON object must have a "success" key set to true, and a "data" key containing the weather information with this structure:
             { "location": "City, Country", "current": { "temp": number, "condition": "string" }, "forecast": [ { "day": "string", "temp": number, "condition": "string" }, ... ] }
-            If the location is not found or is ambiguous, the JSON object must have a "success" key set to false, and an "error" key with a message like "Məkan tapılmadı".
+            If the location is not found or is ambiguous, the JSON object must have a "success" key set to false, and an "error" key with a message like "MЙ™kan tapД±lmadД±".
             Do not include any text, markdown, or commentary outside of the JSON object.`,
             config: {
                 responseMimeType: "application/json",
@@ -389,14 +322,14 @@ export async function getWeather(location: string): Promise<WeatherData> {
         }
 
         // If we reach here, the response is malformed.
-        throw new Error("Hava məlumatı üçün natamam cavab alındı.");
+        throw new Error("Hava mЙ™lumatД± ГјГ§Гјn natamam cavab alД±ndД±.");
 
     } catch (error) {
         console.error("Error fetching weather:", error);
         if (error instanceof Error) {
             throw error;
         }
-        throw new Error("Hava məlumatı əldə edilərkən naməlum xəta baş verdi.");
+        throw new Error("Hava mЙ™lumatД± Й™ldЙ™ edilЙ™rkЙ™n namЙ™lum xЙ™ta baЕџ verdi.");
     }
 }
 
@@ -410,86 +343,104 @@ export async function translateText(text: string, targetLang: string): Promise<s
     if (!text || !text.trim()) {
         return "";
     }
+
     try {
-        if (!aiTranslate) {
-            // Fallback: no translation available
-            return text;
-        }
-        const response = await aiTranslate.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: `Translate the following text to ${targetLang}. Rules:\n- Preserve original line breaks.\n- Return ONLY the translated text.\n- Do NOT add quotes, code fences, or any commentary.\n\nTEXT:\n${text}`,
-            config: { responseMimeType: 'text/plain' as any },
+        const response = await fetch(`${BACKEND_URL}/api/translate`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                text: text,
+                target_language: targetLang,
+            }),
         });
-        let out = (response.text || '').trim();
-        // Strip accidental fences/quotes
-        out = out.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
-        if ((out.startsWith('"') && out.endsWith('"')) || (out.startsWith("'") && out.endsWith("'"))) {
-            out = out.slice(1, -1);
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: 'Tərcümə xətası: Serverdən cavab oxuna bilmədi' }));
+            throw new Error(errorData.detail || `Server xətası: ${response.status}`);
         }
-        return out.trim();
+
+        const result = await response.json();
+        return result.translated_text || '';
+
     } catch (error) {
-        console.error("Error translating text:", error);
-        throw new Error("Tərcümə etmək mümkün olmadı.");
+        console.error("Error translating text via backend:", error);
+        // Fallback: try direct Gemini translate if API client is configured
+        try {
+            if (!ai) {
+                // Provide helpful guidance for missing key
+                const msg = (error instanceof Error ? error.message : '') || '';
+                if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('TypeError')) {
+                    throw new Error(
+                        `Tərcümə etmək mümkün olmadı: Backend əlçatmazdır və AI açarı qurulmayıb. ` +
+                        `Zəhmət olmasa VITE_GEMINI_API_KEY dəyərini .env.local faylına əlavə edin.`
+                    );
+                }
+                throw new Error(`Tərcümə etmək mümkün olmadı: ${msg || 'Naməlum xəta'}`);
+            }
+            const prompt = `Please translate the following text into the target language.
+IMPORTANT: Return ONLY the translated text with no extra commentary.
+Target language code: ${targetLang}
+
+Text:
+"""
+${text.slice(0, 6000)}
+"""`;
+            const resp = await ai.models.generateContent({ model, contents: [{ role: 'user', parts: [{ text: prompt }] }] });
+            const out = resp.text?.trim() || '';
+            return out;
+        } catch (fallbackErr) {
+            // Network/CORS hints for UX
+            const generic = 'Tərcümə zamanı naməlum xəta baş verdi.';
+            if (fallbackErr instanceof Error) {
+                const msg = fallbackErr.message || '';
+                if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('TypeError')) {
+                    throw new Error(
+                        `Tərcümə etmək mümkün olmadı: Backend və ya AI xidmətinə qoşulmaq alınmadı. ` +
+                        `Zəhmət olmasa internet bağlantısını və VITE_GEMINI_API_KEY ayarını yoxlayın.`
+                    );
+                }
+                throw new Error(`Tərcümə etmək mümkün olmadı: ${msg}`);
+            }
+            throw new Error(generic);
+        }
     }
 }
+
 /**
- * Answers a query by performing a grounded call with Google Search tools enabled.
- * Falls back to Serper listing when AI is unavailable.
+ * Answers a query by first performing a Serper web search and then asking Gemini to
+ * respond using those results as context. Returns the model's text and normalized sources.
  * This does not stream; it performs a single request for simplicity.
  */
 export async function answerWithGroundedSearch(query: string, opts?: { num?: number; gl?: string; hl?: string }, memory?: string) {
-  // Fallback path when AI is unavailable: return Serper results as a simple list
+  const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAЕћ (kontekstЙ™ kГ¶mЙ™k ГјГ§Гјn):\n${memory.slice(-1500)}` : '';
+  const systemInstruction = `SЙ™n NovEra adlД± kГ¶mЙ™kГ§isЙ™n vЙ™ bГјtГјn cavablarД±nД± AzЙ™rbaycan dilindЙ™ ver.\n\n` +
+    `Cavab verЙ™rkЙ™n Google AxtarД±Еџ alЙ™tindЙ™n (grounding) istifadЙ™ et, iddialarД± Й™n son mЙ™nbЙ™lЙ™rlЙ™ dЙ™stЙ™klЙ™ vЙ™ [1], [2]... kimi istinadlar ver.\n` +
+    `MЙ™nbЙ™lЙ™rdЙ™n sitat gЙ™tirЙ™rkЙ™n qД±sa vЙ™ dЙ™qiq ol.` + memoryBlock;
+
   if (!ai) {
-    const locale = (opts?.hl && opts?.gl) ? { hl: opts.hl, gl: opts.gl } : detectLocaleForSearch();
-    const serper: SerperResponse | null = await serperSearchWeb(query, Math.min(opts?.num ?? 8, 12), { gl: locale.gl, hl: locale.hl });
-    const organic = serper?.organic || [];
-    const sources: Source[] = organic.slice(0, 6).map((r, i) => ({
-      uri: r.link,
-      title: r.title || new URL(r.link).hostname,
-      index: i + 1,
-    }));
-    const list = organic.slice(0, 6).map((r, i) => `${i + 1}) ${r.title} — ${r.link}`).join('\n');
-    const text = organic.length
-      ? `Axtarış nəticələri (Serper):\n${list}\n\nDaha dəqiq cavab üçün AI açarını (VITE_GEMINI_API_KEY) konfiqurasiya edin.`
-      : 'Uyğun nəticə tapılmadı.';
-    return { text, sources };
+    return { text: 'AI aГ§arД± yoxdur. ZЙ™hmЙ™t olmasa VITE_GEMINI_API_KEY tЙ™yin edin.', sources: [] as Source[] };
   }
 
-  // Grounding with Google Search via Gemini tools
-  const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
-  const systemInstruction = `Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver. Cavabın əvvəlində qısa təqdimat ver: "Mən NovEra-yam — NovEra şirkəti tərəfindən yaradılmış AI köməkçi."\n\n` +
-    `Mütləq şəkildə iddialarını mənbələrlə dəstəklə və cavabın sonunda \"Mənbələr\" bölməsində linkləri göstər.\n` +
-    `Əgər dəqiq cavab tapılmırsa, bunu açıq şəkildə bildir.` + memoryBlock;
-
-  const contents: Content[] = [{ role: 'user', parts: [{ text: query }] }];
-
-  const groundedModel = 'gemini-2.5-flash';
   const response = await ai.models.generateContent({
-    model: groundedModel,
-    contents,
+    model,
+    contents: [{ role: 'user', parts: [{ text: query }] }],
     config: {
+      tools: [googleSearchTool],
       systemInstruction,
-      // Enable official Google Search Grounding
-      tools: [{ google_search: {} } as any],
     },
   });
 
   const text = response.text?.trim() || '';
-
-  // Extract grounded sources from grounding metadata
-  const seenUris = new Set<string>();
-  const sources: Source[] = [];
-  const groundingChunks = (response as any)?.candidates?.[0]?.groundingMetadata?.groundingChunks;
-  if (Array.isArray(groundingChunks)) {
-    let index = 1;
-    for (const { web } of groundingChunks) {
-      if (web?.uri && !seenUris.has(web.uri)) {
-        sources.push({ uri: web.uri, title: web.title || new URL(web.uri).hostname, index });
-        seenUris.add(web.uri);
-        index++;
-      }
-    }
-  }
+  const groundingChunks = (response as any).candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+  const seen = new Set<string>();
+  const sources: Source[] = groundingChunks
+    .map((g: any) => g?.web)
+    .filter((w: any) => w && w.uri)
+    .filter((w: any) => { if (seen.has(w.uri)) return false; seen.add(w.uri); return true; })
+    .slice(0, 8)
+    .map((w: any, i: number) => ({ uri: w.uri, title: w.title || new URL(w.uri).hostname, index: i + 1 }));
 
   return { text, sources };
 }
