@@ -67,10 +67,10 @@ export interface VoiceOption {
 }
 
 export interface AppSettings {
-  voiceEnabled: boolean;
-  voiceId: string;
   theme: string;
   noveraColor?: string; // custom background color for NovEra theme
+  voiceEnabled?: boolean;
+  voiceId?: string;
 }
 
 export interface WeatherData {

@@ -25,7 +25,9 @@
         }
       }
     </script>
-    <style>
+        <style>
+      /* Layout reset removed (revert to original) */
+
       /* --- THEMES --- */
       :root, .theme-novera, .theme-terra, .theme-nebula {
         --color-bg-jet: #0d0f19;
@@ -34,16 +36,9 @@
         --color-text: #eeeeee;
         --color-subtext: #a8b2c1;
       }
-      .theme-novera {
-        --color-accent: #58A6FF;
-        --color-bg-jet: #000000; /* Pure black background for NovEra */
-      }
-      .theme-terra { /* Nature theme */
-        --color-accent: #6ee7b7;
-      }
-      .theme-nebula { /* Universe/Nebula theme */
-        --color-accent: #c084fc;
-      }
+      .theme-novera { --color-accent: #58A6FF; --color-bg-jet: #000000; }
+      .theme-terra { /* Nature theme */ --color-accent: #6ee7b7; }
+      .theme-nebula { /* Universe/Nebula theme */ --color-accent: #c084fc; }
       body {
         /* Set on body for theme consistency, but main app uses transparent bg */
         background-color: var(--color-bg-jet);
@@ -78,25 +73,12 @@
       
       /* --- ANIMATIONS --- */
       @keyframes pulse-orb {
-        0% {
-          transform: scale(0.95);
-          box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.7);
-        }
-        70% {
-          transform: scale(1);
-          box-shadow: 0 0 0 20px rgba(88, 166, 255, 0), 0 0 30px rgba(88, 166, 255, 0.5);
-        }
-        100% {
-          transform: scale(0.95);
-          box-shadow: 0 0 0 0 rgba(88, 166, 255, 0);
-        }
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.7); }
+        70% { transform: scale(1); box-shadow: 0 0 0 20px rgba(88, 166, 255, 0), 0 0 30px rgba(88, 166, 255, 0.5); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(88, 166, 255, 0); }
       }
-      .orb-animation {
-        animation: pulse-orb 4s infinite ease-in-out;
-      }
-      .recording-pulse {
-        animation: pulse-rec 1.5s infinite ease-in-out;
-      }
+      .orb-animation { animation: pulse-orb 4s infinite ease-in-out; }
+      .recording-pulse { animation: pulse-rec 1.5s infinite ease-in-out; }
       @keyframes pulse-rec {
         0% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0.7); }
         70% { box-shadow: 0 0 0 10px rgba(255, 82, 82, 0); }
