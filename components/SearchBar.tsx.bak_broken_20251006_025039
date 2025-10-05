@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { SendIcon, LoadingSpinner, MicrophoneIcon, PlusIcon } from './Icons';
 import type { SearchMode } from '../types';
 import { suggestAutocomplete, detectLocaleForSearch } from '../services/searchService';
@@ -20,7 +20,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<any | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
   const sttBaseTextRef = useRef<string>('');
   const debounceRef = useRef<number | null>(null);
 
@@ -119,7 +119,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
       return;
     }
     try {
-      const rec: any = new SpeechRec();
+      const rec: SpeechRecognition = new SpeechRec();
       rec.lang = (navigator.language || 'az-AZ');
       rec.continuous = true;
       rec.interimResults = true;
@@ -259,8 +259,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
                   </button>
                 ))}
               </div>
-            )}
-          </div>
         </div>
 
         <div className="flex items-center gap-2 pl-3 border-l border-white/10">
@@ -273,7 +271,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
           >
             <MicrophoneIcon className="w-5 h-5 md:w-6 md:h-6" />
           </button>
-
 
           <button
             onClick={handleSend}
@@ -288,7 +285,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
           ref={fileInputRef}
           type="file" 
           onChange={handleFileUpload}
-          className="hidden" 
+{{ ... }}
           accept="image/*"
         />
         <input 

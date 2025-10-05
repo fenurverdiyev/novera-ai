@@ -1,0 +1,67 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { SendIcon, LoadingSpinner, MicrophoneIcon, PlusIcon } from './Icons';
+import type { SearchMode } from '../types';
+import { suggestAutocomplete, detectLocaleForSearch } from '../services/searchService';
+
+interface SearchBarProps {
+  onSend: (query: string, images?: string[]) => void;
+  isLoading: boolean;
+  onVoiceClick?: () => void; // Opens live conversation overlay (optional; may be disabled)
+  searchMode: SearchMode;
+  onChangeMode: (mode: SearchMode) => void;
+}
+
+export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoiceClick, searchMode, onChangeMode }) => {
+  const [query, setQuery] = useState('');
+  const [showUploadMenu, setShowUploadMenu] = useState(false);
+{{ ... }}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 pl-3 border-l border-white/10">
+          <button
+            onClick={toggleListening}
+            className={`p-2 rounded-full transition-colors ${isListening ? 'text-rose-300 bg-rose-500/10 ring-2 ring-rose-400/60 animate-pulse' : 'text-gray-300 hover:text-white hover:bg-white/10'}`}
+            aria-pressed={isListening}
+            aria-label="Səsi mətinə çevir"
+            title="Səsi mətinə çevir"
+          >
+            <MicrophoneIcon className="w-5 h-5 md:w-6 md:h-6" />
+          </button>
+
+          {onVoiceClick && (
+            <button onClick={onVoiceClick} className="p-2 rounded-full text-gray-300 hover:text-white hover:bg-white/10 transition-colors" aria-label="Canlı danışıq">
+              <LiveCircleIcon className="w-5 h-5 md:w-6 md:h-6" />
+            </button>
+          )}
+
+          <button
+            onClick={handleSend}
+            disabled={isLoading || !query.trim()}
+            className="p-2 rounded-full bg-accent text-white disabled:bg-gray-600 transition-colors flex items-center justify-center w-9 h-9 md:w-10 md:h-10"
+          >
+            {isLoading ? <LoadingSpinner className="w-5 h-5 md:w-6 md:h-6" /> : <SendIcon className="w-5 h-5 md:w-6 md:h-6" />}
+          </button>
+        </div>
+
+        <input 
+          ref={fileInputRef}
+          type="file" 
+          onChange={handleFileUpload}
+{{ ... }}
+          accept="image/*"
+        />
+        <input 
+          ref={galleryInputRef}
+          type="file" 
+          onChange={handleFileUpload}
+          className="hidden" 
+          accept="image/*"
+          capture="environment"
+        />
+      </div>
+    </div>
+  );
+};

@@ -1,8 +1,7 @@
-﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { SearchBar } from './components/SearchBar';
 import { MessageDisplay } from './components/MessageDisplay';
 import { streamChatQuery, generateRelatedQuestions, answerWithGroundedSearch } from './services/geminiService';
-import { ttsBinary } from './services/ttsBackendService';
 import { searchImagesAndVideos, searchPlaces, searchNews, searchShopping, detectLocaleForSearch } from './services/searchService';
 import type { Message, AppView, AppSettings, ToolCall, SearchMode, PlaceResult, ShoppingProduct } from './types';
 import { Sidebar } from './components/Sidebar';
@@ -11,103 +10,80 @@ import { Weather } from './components/Weather';
 import { Translate } from './components/Translate';
 import { Settings } from './components/Settings';
 import { Logo } from './components/Logo';
-import { VoiceOverlay } from './components/VoiceOverlay';
 import { THEMES } from './animations/themes';
 import { useDeviceTools } from './hooks/useDeviceTools';
 import { Profile } from './components/Profile';
 import { GoogleSearchView } from './components/GoogleSearchView';
 import { MenuIcon, CloseIcon } from './components/Icons';
 import { BrowserView } from './components/BrowserView';
-import { chunkText } from './utils/text';
 import { hasVisualIntent, hasPlaceIntent, hasNewsIntent, hasShoppingIntent, buildPlaceRecommendations, buildProductRecommendations, wantsProductRecommendations } from './utils/intents';
 import { refineVisualQuery } from './utils/refineVisualQuery';
 
 
 // Simple visual/places intent detectors
 const App: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const saved = localStorage.getItem('nov-era-chat-history');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [isLoading, setIsLoading] = useState(false);
-  const [isAppReady, setIsAppReady] = useState(false);
-  const [activeView, setActiveView] = useState<AppView>('search');
-  const [searchMode, setSearchMode] = useState<SearchMode>(() => {
-    try {
-      const saved = localStorage.getItem('nov-era-search-mode') as SearchMode | null;
-      return saved === 'universe' ? 'universe' : 'base';
-    } catch { return 'base'; }
-  });
-  
-  const [settings, setSettings] = useState<AppSettings>(() => {
-  try {
-    const savedSettings = localStorage.getItem('gemini-insight-settings');
-    if (savedSettings) {
-      const parsed = JSON.parse(savedSettings);
-      return { noveraColor: '#000000', ...parsed };
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const saved = localStorage.getItem('nov-era-chat-history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
     }
-  } catch (error) {
-    console.error("Could not parse saved settings:", error);
-  }
-  return {
-    voiceEnabled: true,
-    voiceId: undefined,
-    theme: 'novera',
-    noveraColor: '#000000',
-  };
-});
-
-const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
-const [isVoiceOverlayOpen, setIsVoiceOverlayOpen] = useState(false);
-const [scrollOffset, setScrollOffset] = useState(0);
-const messagesEndRef = useRef<HTMLDivElement>(null);
-const audioRef = useRef<HTMLAudioElement>(null);
-const fileInputRef = useRef<HTMLInputElement>(null); // For image uploads
-const sentenceQueueRef = useRef<string[]>([]);
-const isProcessingSentencesRef = useRef(false);
-const currentPlayingMessageIdRef = useRef<string | null>(null);
-const audioContextRef = useRef<AudioContext | null>(null);
-const analyserRef = useRef<AnalyserNode | null>(null);
-const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
-const sentenceAudioCacheRef = useRef<Record<string, string | null>>({});
-const saveTimerRef = useRef<number | null>(null);
-const addMessage = useCallback((message: Omit<Message, 'id'>) => {
-    setMessages(prev => [...prev, { ...message, id: Date.now().toString() }]);
-  }, []);
-
-
-  const { executeToolCalls } = useDeviceTools(addMessage);
-
-
-  useEffect(() => {
-    // Simulate app loading
-    const timer = setTimeout(() => {
-      setIsAppReady(true);
-      const loadingScreen = document.getElementById('loading-screen');
-      if (loadingScreen) {
-        loadingScreen.classList.add('hidden');
-      }
-    }, 800); // Faster initial loading
-    return () => clearTimeout(timer);
-  }, []);
-  
-  useEffect(() => {
-    try {
-      localStorage.setItem('gemini-insight-settings', JSON.stringify(settings));
-      document.body.className = `theme-${settings.theme} font-sans`;
-    } catch (error) {
-      console.error("Could not save settings:", error);
-    }
-  }, [settings]);
+  });
+  const [isLoading, setIsLoading] = useState(false);
+  const [isAppReady, setIsAppReady] = useState(false);
+  const [activeView, setActiveView] = useState<AppView>('search');
+  const [searchMode, setSearchMode] = useState<SearchMode>(() => {
+    try {
+      const saved = localStorage.getItem('nov-era-search-mode') as SearchMode | null;
+      return saved === 'universe' ? 'universe' : 'base';
+    } catch { return 'base'; }
+  });
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try {
+      const savedSettings = localStorage.getItem('gemini-insight-settings');
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        return { noveraColor: '#000000', ...parsed };
+      }
+    } catch (error) {
+      console.error("Could not parse saved settings:", error);
+    }
+    return { theme: 'novera', noveraColor: '#000000' };
+  });
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const addMessage = useCallback((message: Omit<Message, 'id'>) => {
+    setMessages(prev => [...prev, { ...message, id: Date.now().toString() }]);
+  }, []);
+  const { executeToolCalls } = useDeviceTools(addMessage);
 
 
-  useEffect(() => {
-    try { localStorage.setItem('nov-era-search-mode', searchMode); } catch {}
-  }, [searchMode]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsAppReady(true);
+      const loadingScreen = document.getElementById('loading-screen');
+      if (loadingScreen) {
+        loadingScreen.classList.add('hidden');
+      }
+    }, 800); // Faster initial loading
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('gemini-insight-settings', JSON.stringify(settings));
+      document.body.className = `theme-${settings.theme} font-sans`;
+    } catch (error) {
+      console.error("Could not save settings:", error);
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    try { localStorage.setItem('nov-era-search-mode', searchMode); } catch {}
+  }, [searchMode]);
 
 
   useEffect(() => {
@@ -150,8 +126,10 @@ const addMessage = useCallback((message: Omit<Message, 'id'>) => {
   }, []);
 
 
-  const handleSend = async (query: string, images?: string[]) => {
-    setIsLoading(true);
+  const handleSend = async (query: string, images?: string[], isVocalQuery: boolean = false) => {
+    // Always close overlay; background TTS will continue
+    setIsVoiceOverlayOpen(false);
+    setIsLoading(true);
     const userMessage: Message = { id: Date.now().toString(), role: 'user', text: query };
     const modelMessageId = (Date.now() + 1).toString();
     const initialModelMessage: Message = {
@@ -248,7 +226,7 @@ const addMessage = useCallback((message: Omit<Message, 'id'>) => {
       const sentenceEndRegex = /[.!?…]/;
 
 
-      if (false && settings.voiceEnabled) {
+      if (isVocalQuery && settings.voiceEnabled) {
         currentPlayingMessageIdRef.current = modelMessageId;
         setPlayingMessageId(modelMessageId);
       }
@@ -293,7 +271,7 @@ const addMessage = useCallback((message: Omit<Message, 'id'>) => {
           }
 
 
-          if (false && settings.voiceEnabled) {
+          if (isVocalQuery && settings.voiceEnabled) {
             let match;
             while ((match = sentenceAccumulator.match(sentenceEndRegex))) {
               const sentence = sentenceAccumulator.substring(0, match.index! + 1).trim();
@@ -342,18 +320,18 @@ const addMessage = useCallback((message: Omit<Message, 'id'>) => {
         } : msg));
 
 
-        
+        if (isVocalQuery) setLiveVocalResponse({ id: modelMessageId, text: fullResponseText });
+      }
 
 
       // Handle any remaining text in the accumulator
-      if (false && settings.voiceEnabled && sentenceAccumulator.trim()) {
+      if (isVocalQuery && settings.voiceEnabled && sentenceAccumulator.trim()) {
         const leftover = sentenceAccumulator.trim();
         sentenceQueueRef.current.push(leftover);
         if (!isProcessingSentencesRef.current) {
           processVocalStream();
         }
       }
-}
 
 
       if (accumulatedToolCalls.length > 0) {
@@ -430,14 +408,18 @@ const addMessage = useCallback((message: Omit<Message, 'id'>) => {
   };
 
 
+  const handleCloseVoiceOverlay = () => {
+    setIsVoiceOverlayOpen(false);
+    setLiveVocalResponse(null);
+    stopPlayback();
+  };
+  
   const handleScroll = (event: React.UIEvent<HTMLElement>) => {
     setScrollOffset(event.currentTarget.scrollTop);
   };
 
 
-  const handleCloseVoiceOverlay = () => { setIsVoiceOverlayOpen(false); };
-
-const renderView = () => {
+  const renderView = () => {
     switch (activeView) {
         case 'browser': return <BrowserView />;
         case 'google-search': return <GoogleSearchView />;
@@ -459,19 +441,20 @@ const renderView = () => {
                         ) : (
                             <div>
                                 {messages.map(msg => (
-                                    <MessageDisplay key={msg.id} message={msg} onRelatedQuery={(q) => handleSend(q)} />
+                                    <MessageDisplay key={msg.id} message={msg} onRelatedQuery={(q) => handleSend(q)} onPlayAudio={handlePlayAudio} playingMessageId={playingMessageId} />
                                 ))}
                                 <div ref={messagesEndRef} />
                             </div>
                         )}
                     </main>
                     <footer className="bg-transparent pt-2">
-                                  <SearchBar 
-            onSend={(q) => handleSend(q)} 
-            isLoading={isLoading} 
-            searchMode={searchMode}
-            onChangeMode={setSearchMode}
-          />
+                        <SearchBar 
+                            onSend={(q) => handleSend(q)} 
+                            isLoading={isLoading} 
+                            onVoiceClick={() => setIsVoiceOverlayOpen(true)} 
+                            searchMode={searchMode}
+                            onChangeMode={setSearchMode}
+                        />
                         <p className="text-center text-xs text-text-sub pb-3">
                         NovEra səhv edə bilər. Vacib məlumatları yoxlamağınız tövsiyə olunur.
                         </p>
@@ -581,7 +564,7 @@ const renderView = () => {
         nextSentences.forEach(nextSentence => {
             if (nextSentence && sentenceAudioCacheRef.current[nextSentence] === undefined) {
                 sentenceAudioCacheRef.current[nextSentence] = null; 
-                ttsBinary(nextSentence, { voiceId: settings.voiceId }).then(url => {
+                textToSpeech(nextSentence, settings.voiceId).then(url => {
                     sentenceAudioCacheRef.current[nextSentence] = url;
                 });
             }
@@ -590,7 +573,7 @@ const renderView = () => {
 
         let url = sentenceAudioCacheRef.current[sentence];
         if (url === undefined || url === null) {
-            url = await ttsBinary(sentence, { voiceId: settings.voiceId });
+            url = await textToSpeech(sentence, settings.voiceId);
             sentenceAudioCacheRef.current[sentence] = url;
         }
 
@@ -674,6 +657,7 @@ const renderView = () => {
       {ActiveAnimation && (
         <ActiveAnimation
           scrollOffset={scrollOffset}
+          analyserNode={analyserRef.current}
           customColor={settings.theme === 'novera' ? (settings.noveraColor || '#000000') : undefined}
         />
       )}
@@ -720,10 +704,17 @@ const renderView = () => {
         className="hidden" 
         accept="image/*"
       />
-            </div>
+      <audio ref={audioRef} crossOrigin="anonymous" />
+      <VoiceOverlay 
+        isOpen={isVoiceOverlayOpen} 
+        onClose={handleCloseVoiceOverlay}
+        onQuery={(q, i) => handleSend(q, i, true)}
+        liveResponse={liveVocalResponse}
+        isResponding={isLoading && !!liveVocalResponse}
+      />
+    </div>
   );
 };
 
 
 export default App;
-

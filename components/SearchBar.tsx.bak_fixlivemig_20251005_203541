@@ -1,12 +1,12 @@
-﻿import React, { useState, useRef, useEffect } from 'react';
-import { SendIcon, LoadingSpinner, MicrophoneIcon, PlusIcon } from './Icons';
+import React, { useState, useRef, useEffect } from 'react';
+import { SendIcon, LoadingSpinner, MicrophoneIcon, PlusIcon, LiveCircleIcon } from './Icons';
 import type { SearchMode } from '../types';
 import { suggestAutocomplete, detectLocaleForSearch } from '../services/searchService';
 
 interface SearchBarProps {
   onSend: (query: string, images?: string[]) => void;
   isLoading: boolean;
-  onVoiceClick?: () => void; // Opens live conversation overlay
+  onVoiceClick: () => void; // Opens live conversation overlay
   searchMode: SearchMode;
   onChangeMode: (mode: SearchMode) => void;
 }
@@ -20,7 +20,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<any | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
   const sttBaseTextRef = useRef<string>('');
   const debounceRef = useRef<number | null>(null);
 
@@ -119,7 +119,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
       return;
     }
     try {
-      const rec: any = new SpeechRec();
+      const rec: SpeechRecognition = new SpeechRec();
       rec.lang = (navigator.language || 'az-AZ');
       rec.continuous = true;
       rec.interimResults = true;
@@ -274,6 +274,9 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
             <MicrophoneIcon className="w-5 h-5 md:w-6 md:h-6" />
           </button>
 
+          <button onClick={onVoiceClick} className="p-2 rounded-full text-gray-300 hover:text-white hover:bg-white/10 transition-colors" aria-label="Canlı danışıq">
+            <LiveCircleIcon className="w-5 h-5 md:w-6 md:h-6" />
+          </button>
 
           <button
             onClick={handleSend}

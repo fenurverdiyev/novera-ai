@@ -11,7 +11,6 @@ import { Weather } from './components/Weather';
 import { Translate } from './components/Translate';
 import { Settings } from './components/Settings';
 import { Logo } from './components/Logo';
-import { VoiceOverlay } from './components/VoiceOverlay';
 import { THEMES } from './animations/themes';
 import { useDeviceTools } from './hooks/useDeviceTools';
 import { Profile } from './components/Profile';
@@ -62,7 +61,6 @@ const App: React.FC = () => {
 });
 
 const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
-const [isVoiceOverlayOpen, setIsVoiceOverlayOpen] = useState(false);
 const [scrollOffset, setScrollOffset] = useState(0);
 const messagesEndRef = useRef<HTMLDivElement>(null);
 const audioRef = useRef<HTMLAudioElement>(null);
@@ -151,7 +149,7 @@ const addMessage = useCallback((message: Omit<Message, 'id'>) => {
 
 
   const handleSend = async (query: string, images?: string[]) => {
-    setIsLoading(true);
+    // Always close overlay; background TTS will setIsLoading(true);
     const userMessage: Message = { id: Date.now().toString(), role: 'user', text: query };
     const modelMessageId = (Date.now() + 1).toString();
     const initialModelMessage: Message = {
@@ -353,7 +351,6 @@ const addMessage = useCallback((message: Omit<Message, 'id'>) => {
           processVocalStream();
         }
       }
-}
 
 
       if (accumulatedToolCalls.length > 0) {
@@ -435,9 +432,7 @@ const addMessage = useCallback((message: Omit<Message, 'id'>) => {
   };
 
 
-  const handleCloseVoiceOverlay = () => { setIsVoiceOverlayOpen(false); };
-
-const renderView = () => {
+  const renderView = () => {
     switch (activeView) {
         case 'browser': return <BrowserView />;
         case 'google-search': return <GoogleSearchView />;
@@ -459,19 +454,19 @@ const renderView = () => {
                         ) : (
                             <div>
                                 {messages.map(msg => (
-                                    <MessageDisplay key={msg.id} message={msg} onRelatedQuery={(q) => handleSend(q)} />
+                                    <MessageDisplay key={msg.id} message={msg} onRelatedQuery={(q) => handleSend(q)} onPlayAudio={handlePlayAudio} playingMessageId={playingMessageId} />
                                 ))}
                                 <div ref={messagesEndRef} />
                             </div>
                         )}
                     </main>
                     <footer className="bg-transparent pt-2">
-                                  <SearchBar 
-            onSend={(q) => handleSend(q)} 
-            isLoading={isLoading} 
-            searchMode={searchMode}
-            onChangeMode={setSearchMode}
-          />
+                        <SearchBar 
+                            onSend={(q) => handleSend(q)} 
+                            isLoading={isLoading} 
+                             searchMode={searchMode}
+                            onChangeMode={setSearchMode}
+                        />
                         <p className="text-center text-xs text-text-sub pb-3">
                         NovEra səhv edə bilər. Vacib məlumatları yoxlamağınız tövsiyə olunur.
                         </p>
@@ -674,6 +669,7 @@ const renderView = () => {
       {ActiveAnimation && (
         <ActiveAnimation
           scrollOffset={scrollOffset}
+          analyserNode={analyserRef.current}
           customColor={settings.theme === 'novera' ? (settings.noveraColor || '#000000') : undefined}
         />
       )}
@@ -720,7 +716,8 @@ const renderView = () => {
         className="hidden" 
         accept="image/*"
       />
-            </div>
+      <audio ref={audioRef} crossOrigin="anonymous" />
+      </div>
   );
 };
 

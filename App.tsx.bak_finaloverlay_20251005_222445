@@ -459,7 +459,7 @@ const renderView = () => {
                         ) : (
                             <div>
                                 {messages.map(msg => (
-                                    <MessageDisplay key={msg.id} message={msg} onRelatedQuery={(q) => handleSend(q)} />
+                                    <MessageDisplay key={msg.id} message={msg} onRelatedQuery={(q) => handleSend(q)} onPlayAudio={handlePlayAudio} playingMessageId={playingMessageId} />
                                 ))}
                                 <div ref={messagesEndRef} />
                             </div>
@@ -469,6 +469,7 @@ const renderView = () => {
                                   <SearchBar 
             onSend={(q) => handleSend(q)} 
             isLoading={isLoading} 
+            onVoiceClick={() => setIsVoiceOverlayOpen(true)} 
             searchMode={searchMode}
             onChangeMode={setSearchMode}
           />
@@ -674,6 +675,7 @@ const renderView = () => {
       {ActiveAnimation && (
         <ActiveAnimation
           scrollOffset={scrollOffset}
+          analyserNode={analyserRef.current}
           customColor={settings.theme === 'novera' ? (settings.noveraColor || '#000000') : undefined}
         />
       )}
