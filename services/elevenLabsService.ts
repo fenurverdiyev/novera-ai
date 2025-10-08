@@ -9,7 +9,27 @@ const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY;
 const ELEVENLABS_BASE_URL = 'https://api.elevenlabs.io/v1';
 
 if (!ELEVENLABS_API_KEY) {
-    console.warn('VITE_ELEVENLABS_API_KEY not found. Voice features will be disabled.');
+    console.warn('VITE_ELEVENLABS_API_KEY not found. Falling back to /api/elevenlabs-proxy if available.');
+}
+
+async function callProxy(text: string, voiceId: string): Promise<string | null> {
+    try {
+        const resp = await fetch('/api/elevenlabs-proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text.trim(), voiceId })
+        });
+        if (!resp.ok) {
+            const t = await resp.text().catch(() => '');
+            console.error('Proxy TTS error:', resp.status, t);
+            return null;
+        }
+        const blob = await resp.blob();
+        return URL.createObjectURL(blob);
+    } catch (e) {
+        console.warn('Proxy not available or failed', e);
+        return null;
+    }
 }
 
 export interface Voice {
@@ -42,8 +62,8 @@ export async function textToSpeech(
     similarityBoost: number = 0.75
 ): Promise<string | null> {
     if (!ELEVENLABS_API_KEY) {
-        console.warn('ElevenLabs API key not available');
-        return null;
+        // Try proxy instead of disabling completely
+        return await callProxy(text, voiceId);
     }
 
     if (!text || text.trim().length === 0) {

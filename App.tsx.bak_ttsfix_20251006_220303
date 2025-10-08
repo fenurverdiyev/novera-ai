@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { SearchBar } from './components/SearchBar';
 import { MessageDisplay } from './components/MessageDisplay';
 import { streamChatQuery, generateRelatedQuestions, answerWithGroundedSearch } from './services/geminiService';
@@ -19,7 +19,8 @@ import { BrowserView } from './components/BrowserView';
 import LiveConversationView from './components/LiveConversationView';
 import { hasVisualIntent, hasPlaceIntent, hasNewsIntent, hasShoppingIntent, buildPlaceRecommendations, buildProductRecommendations, wantsProductRecommendations } from './utils/intents';
 import { refineVisualQuery } from './utils/refineVisualQuery';
-import { textToSpeech } from './services/elevenLabsService';
+
+
 // Simple visual/places intent detectors
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -32,9 +33,7 @@ const App: React.FC = () => {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isAppReady, setIsAppReady] = useState(false);
-  const [isLiveOverlayOpen, setIsLiveOverlayOpen] = useState(false);
-  
-  const [liveVocalResponse, setLiveVocalResponse] = useState<{ id: string; text: string } | null>(null);const [activeView, setActiveView] = useState<AppView>('search');
+  const [activeView, setActiveView] = useState<AppView>('search');
   const [searchMode, setSearchMode] = useState<SearchMode>(() => {
     try {
       const saved = localStorage.getItem('nov-era-search-mode') as SearchMode | null;
@@ -46,8 +45,7 @@ const App: React.FC = () => {
       const savedSettings = localStorage.getItem('gemini-insight-settings');
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
-        const migratedTheme = parsed.theme === 'rgbneon' ? 'plexus' : parsed.theme;
-        return { noveraColor: '#000000', ...parsed, theme: migratedTheme };
+        return { noveraColor: '#000000', ...parsed };
       }
     } catch (error) {
       console.error("Could not parse saved settings:", error);
@@ -62,16 +60,13 @@ const App: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-    const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
-    const sentenceQueueRef = useRef<string[]>([]);
-    const currentPlayingMessageIdRef = useRef<string | null>(null);
-  const isProcessingSentencesRef = useRef(false);
-  const sentenceAudioCacheRef = useRef<Record<string, string | null>>({});
-  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const addMessage = useCallback((message: Omit<Message, 'id'>) => {
     setMessages(prev => [...prev, { ...message, id: Date.now().toString() }]);
   }, []);
   const { executeToolCalls } = useDeviceTools(addMessage);
+
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsAppReady(true);
@@ -81,21 +76,6 @@ const App: React.FC = () => {
       }
     }, 800); // Faster initial loading
     return () => clearTimeout(timer);
-  }, []);
-
-  // Listen for global "clear all history" requests from Sidebar's button
-  useEffect(() => {
-    const handleClearAll = () => {
-      try {
-        localStorage.removeItem('nov-era-sessions');
-        localStorage.removeItem('nov-era-chat-history');
-        window.dispatchEvent(new Event('nov-era-sessions-updated' as any));
-      } catch {}
-      setMessages([]);
-      setActiveView('search');
-    };
-    window.addEventListener('nov-era-clear-all' as any, handleClearAll as any);
-    return () => window.removeEventListener('nov-era-clear-all' as any, handleClearAll as any);
   }, []);
 
   useEffect(() => {
@@ -154,8 +134,7 @@ const App: React.FC = () => {
 
   const handleSend = async (query: string, images?: string[], isVocalQuery: boolean = false) => {
     // Always close overlay; background TTS will continue
-    setActiveView('search');
-    setIsLiveOverlayOpen(false);
+    setIsVoiceOverlayOpen(false);
     setIsLoading(true);
     const userMessage: Message = { id: Date.now().toString(), role: 'user', text: query };
     const modelMessageId = (Date.now() + 1).toString();
@@ -250,7 +229,7 @@ const App: React.FC = () => {
       let fullResponseText = '';
       let accumulatedToolCalls: ToolCall[] = [];
       let sentenceAccumulator = '';
-      const sentenceEndRegex = /[.!?…]/;
+      const sentenceEndRegex = /[.!?Ђ¦]/;
 
 
       if (isVocalQuery && settings.voiceEnabled) {
@@ -413,7 +392,7 @@ const App: React.FC = () => {
       }
     } catch (error) {
       console.error('An error occurred:', error);
-      setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, text: "Üzr istəyirəm, xəta baş verdi. Zəhmət olmasa yenidən cəhd edin." } : msg));
+      setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, text: "Гњzr istЙ™yirЙ™m, xЙ™ta baЕџ verdi. ZЙ™hmЙ™t olmasa yenidЙ™n cЙ™hd edin." } : msg));
     } finally {
       setIsLoading(false);
     }
@@ -427,7 +406,7 @@ const App: React.FC = () => {
         const base64Image = e.target?.result as string;
         // You can now send this image with a message
         // For now, let's just add it to a new message
-        const query = "Bu şəkli analiz et.";
+        const query = "Bu ЕџЙ™kli analiz et.";
         handleSend(query, [base64Image]);
       };
       reader.readAsDataURL(file);
@@ -447,13 +426,13 @@ const App: React.FC = () => {
         case 'news': return <News themeColor={activeThemeColor} />;
         case 'weather': return <Weather />;
         case 'translate': return <Translate />;
-        case 'profile': return <Profile />;
+        case 'profile': return <Profile \/>;
         case 'settings': return <Settings settings={settings} onSettingsChange={setSettings} themeColor={activeThemeColor} />;
                 case 'live':
             return (
                 <div className="flex flex-col h-full bg-bg-jet/80 backdrop-blur-sm">
                     <main className="flex-grow overflow-y-auto"> 
-                        <LiveConversationView onQuery={(q, imgs) => handleSend(q, imgs, true)} onBack={() => setActiveView('search')} />
+                        <LiveConversationView />
                     </main>
                 </div>
             );
@@ -485,7 +464,7 @@ const App: React.FC = () => {
                             onChangeMode={setSearchMode}
                         />
                         <p className="text-center text-xs text-text-sub pb-3">
-                        NovEra səhv edə bilər. Vacib məlumatları yoxlamağınız tövsiyə olunur.
+                        NovEra səhv edə bilər. Vacib məlumatları yoxlamağınız tövsiyə olunur.r.
                         </p>
                     </footer>
                 </div>
@@ -621,7 +600,7 @@ const App: React.FC = () => {
     } catch (error) {
         console.error("SЙ™s oxunarkЙ™n xЙ™ta baЕџ verdi:", sentence, error);
         if (currentPlayingMessageIdRef.current) {
-          setMessages(prev => prev.map(m => m.id === currentPlayingMessageIdRef.current ? { ...m, ttsError: 'Səsləndirmə mümkün olmadı.' } : m));
+          setMessages(prev => prev.map(m => m.id === currentPlayingMessageIdRef.current ? { ...m, ttsError: 'SЙ™slЙ™ndirmЙ™ mГјmkГјn olmadД±.' } : m));
         }
         sentenceQueueRef.current.shift();
         isProcessingSentencesRef.current = false;
@@ -644,7 +623,7 @@ const App: React.FC = () => {
     audio.addEventListener('ended', handleAudioEnd);
     return () => audio.removeEventListener('ended', handleAudioEnd);
   }, [processVocalStream]);
-  const chunkText = (text: string): string[] => (text.match(/[^.!?…]+[.!?…]*|[^.!?]+$/g)?.map(s => s.trim()).filter(Boolean) || []);
+
 
   const handlePlayAudio = (messageId: string, text: string) => {
     if (playingMessageId === messageId) {
@@ -715,11 +694,11 @@ const App: React.FC = () => {
       <div className="flex-1 flex flex-col overflow-y-hidden w-0 min-w-0">
         {/* Mobile top bar */}
         <div className="md:hidden flex items-center justify-between px-3 py-2 border-b border-white/10 bg-bg-slate/80 backdrop-blur sticky top-0 z-40">
-          <button onClick={() => setIsSidebarOpen(true)} className="p-2 rounded-lg hover:bg-white/10 text-white/90" aria-label="Menyunu aç">
+          <button onClick={() => setIsSidebarOpen(true)} className="p-2 rounded-lg hover:bg-white/10 text-white/90" aria-label="Menyunu aГ§">
             <MenuIcon className="w-6 h-6" />
           </button>
           <Logo />
-          <button onClick={clearHistory} className="px-3 py-1.5 rounded-lg bg-accent/20 text-white hover:bg-accent/30 text-xs">Yeni söhbət</button>
+          <button onClick={clearHistory} className="px-3 py-1.5 rounded-lg bg-accent/20 text-white hover:bg-accent/30 text-xs">Yeni sГ¶hbЙ™t</button>
         </div>
 
 
@@ -738,18 +717,6 @@ const App: React.FC = () => {
 
 
 export default App;
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -12,26 +12,34 @@ export interface GeminiTTSOptions {
  * @returns A Blob URL suitable for <audio src>.
  */
 export async function geminiTts(text: string, opts: GeminiTTSOptions = {}): Promise<string> {
-  const resp = await fetch('/api/gemini-tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      text,
-      voiceName: opts.voiceName || 'Kore', // Default voice
-    }),
-  });
+  const payload = {
+    text,
+    voiceName: opts.voiceName || 'Kore',
+  } as const;
 
-  if (!resp.ok) {
-    let errorDetails = '';
+  const endpoints = [
+    '/api/gemini-tts',
+    '/functions/gemini-tts',
+    '/.netlify/functions/gemini-tts',
+    '/api/gemini-tts.ts',
+    '/gemini-tts'
+  ];
+
+  let lastErr: any = null;
+  for (const url of endpoints) {
     try {
-      const errJson = await resp.json();
-      errorDetails = errJson.error || JSON.stringify(errJson);
-    } catch (e) {
-      errorDetails = await resp.text();
-    }
-    throw new Error(`Gemini TTS failed: ${resp.status} - ${errorDetails}`);
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        try { console.warn('Gemini TTS endpoint error', url, resp.status, await resp.text()); } catch {}
+        continue;
+      }
+      const blob = await resp.blob();
+      return URL.createObjectURL(blob);
+    } catch (e) { lastErr = e; }
   }
-
-  const blob = await resp.blob();
-  return URL.createObjectURL(blob);
+  throw new Error('Gemini TTS: no working endpoint. Last error: ' + (lastErr?.message || lastErr));
 }

@@ -57,7 +57,7 @@ export interface ShoppingProduct {
   imageUrl?: string;
 }
 
-export type AppView = 'search' | 'google-search' | 'browser' | 'news' | 'weather' | 'translate' | 'settings' | 'profile';
+export type AppView = 'search' | 'google-search' | 'browser' | 'news' | 'weather' | 'translate' | 'settings' | 'profile' | 'live';
 
 export type SearchMode = 'base' | 'universe';
 
@@ -165,13 +165,36 @@ declare class SpeechRecognition extends EventTarget {
 }
 
 interface SpeechGrammarList {
-  length: number;
   addFromString(string: string, weight?: number): void;
   addFromURI(src: string, weight?: number): void;
   [index: number]: SpeechGrammar;
 }
 
-interface SpeechGrammar {
-  src: string;
-  weight: number;
+  interface SpeechGrammar {
+    src: string;
+    weight: number;
+  }
+
+// ================= Live Conversation Types =================
+// Minimal types used by live UI components
+export type ConversationAuthor = 'user' | 'model' | 'system';
+
+export interface ConversationTurn {
+  author: ConversationAuthor;
+  text: string;
 }
+
+export interface GroundingChunk {
+  web?: {
+    uri: string;
+    title?: string | null;
+  } | null;
+}
+
+export type SearchResultItem =
+  | { type: 'image'; title: string; source: string; imageUrl: string }
+  | { type: 'video'; title: string; source: string; imageUrl?: string | null; duration?: string | null }
+  | { type: 'product'; title: string; source: string; imageUrl?: string | null; price: string }
+  | { type: 'location'; title: string; source: string; address?: string | null }
+  | { type: 'map'; title: string; source: string; imageUrl?: string | null }
+  | { type: 'music'; title: string; source: string; artist?: string | null };

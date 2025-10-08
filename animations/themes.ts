@@ -14,6 +14,9 @@ import { SimpleBlackAnimation } from './SimpleBlackAnimation';
 import { RainyWindowAnimation } from './RainyWindowAnimation';
 import { FallingLeavesAnimation } from './FallingLeavesAnimation';
 import { NeonCrystalsAnimation } from './NeonCrystalsAnimation';
+import { StarryNightAnimation } from './StarryNightAnimation';
+import { OceanWavesAnimation } from './OceanWavesAnimation';
+import { ParticlePlexusAnimation } from './ParticlePlexusAnimation';
 
 export interface ThemeAnimationProps {
     scrollOffset?: number;
@@ -134,6 +137,28 @@ export const THEMES: Theme[] = [
         description: 'Dərin, çoxqatlı parallaks effekti ilə kosmosda səyahət edin. Fəaliyyətsiz qaldıqda gizli bürcləri kəşf edin.',
         colors: ['#0d0f19', '#1b2026', '#2196f3'],
         animation: SpaceAnimation,
+    },
+    // New themes
+    {
+        id: 'starry',
+        name: 'Ulduzlu Gecə',
+        description: 'Sakit, dənə-dənə ulduzlarla minimal parallax — yüngül və diqqəti yayındırmır.',
+        colors: ['#0b0f1a', '#111827', '#93c5fd'],
+        animation: StarryNightAnimation,
+    },
+    {
+        id: 'aqua',
+        name: 'Aqua Dalğalar',
+        description: 'Müasir, hamar su dalğaları və yumşaq işıqlanma — fokus və rahatlıq üçün.',
+        colors: ['#05131a', '#0ea5e9', '#67e8f9'],
+        animation: OceanWavesAnimation,
+    },
+    {
+        id: 'plexus',
+        name: 'Plexus Şəbəkəsi',
+        description: 'Hərəkətli hissəciklər və onları birləşdirən xətlər — müasir, yüngül animasiya.',
+        colors: ['#0d0f19', '#58a6ff', '#7c3aed'],
+        animation: ParticlePlexusAnimation,
     },
 ];
 

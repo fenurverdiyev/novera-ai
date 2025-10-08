@@ -1,5 +1,5 @@
-﻿import React, { useState, useRef, useEffect } from 'react';
-import { SendIcon, LoadingSpinner, MicrophoneIcon, PlusIcon } from './Icons';
+import React, { useState, useRef, useEffect } from 'react';
+import { SendIcon, LoadingSpinner, MicrophoneIcon, PlusIcon, LiveCircleIcon } from './Icons';
 import type { SearchMode } from '../types';
 import { suggestAutocomplete, detectLocaleForSearch } from '../services/searchService';
 
@@ -164,7 +164,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
   return (
     <div className="w-full max-w-4xl mx-auto px-3 sm:px-4">
       <div className="relative flex items-stretch bg-bg-slate rounded-2xl shadow-xl p-1.5 sm:p-2 border border-white/10">
-        <div className="flex items-center gap-3 pr-3 border-r border-white/10">
+        <div className="hidden sm:flex items-center gap-3 pr-3 border-r border-white/10">
           <div className="relative flex flex-col rounded-2xl overflow-hidden border border-white/15 bg-white/5 p-1 ring-1 ring-white/10">
             <button
               onClick={() => onChangeMode('base')}
@@ -175,9 +175,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
               }`}
             >
               Base
-              {searchMode === 'base' && (
-                <span className="pointer-events-none absolute left-1 right-1 bottom-1 h-2 rounded-lg bg-white/30" />
-              )}
             </button>
             <button
               onClick={() => onChangeMode('universe')}
@@ -188,9 +185,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
               }`}
             >
               Universe
-              {searchMode === 'universe' && (
-                <span className="pointer-events-none absolute left-1 right-1 bottom-1 h-2 rounded-lg bg-white/30" />
-              )}
             </button>
           </div>
         </div>
@@ -245,14 +239,14 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
               onFocus={() => { if (suggestions.length > 0) {/* show stays */} }}
             />
             {suggestions.length > 0 && (
-              <div className="absolute bottom-full left-0 mb-2 w-full bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 shadow-2xl z-20 overflow-auto max-h-64">
+              <div className="absolute bottom-full left-0 mb-2 w-full bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 shadow-2xl z-20 overflow-auto sm:max-h-64 max-h-56">
                 {suggestions.map((sug, idx) => (
                   <button
                     key={sug}
                     onMouseDown={(e) => { e.preventDefault(); }}
                     onMouseEnter={() => setActiveIndex(idx)}
                     onClick={() => { setQuery(sug); onSend(sug); setSuggestions([]); setActiveIndex(-1); }}
-                    className={`w-full text-left px-4 py-3 text-sm transition-colors truncate ${idx === activeIndex ? 'bg-accent/20 text-white' : 'text-white/90 hover:bg-white/15'}`}
+                    className={`w-full text-left px-4 py-3 text-[13px] sm:text-sm transition-colors truncate ${idx === activeIndex ? 'bg-accent/20 text-white' : 'text-white/90 hover:bg-white/15'}`}
                     title={sug}
                   >
                     {sug}
@@ -274,6 +268,15 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
             <MicrophoneIcon className="w-5 h-5 md:w-6 md:h-6" />
           </button>
 
+          {/* Live conversation trigger (hollow circle) */}
+          <button
+            onClick={() => onVoiceClick && onVoiceClick()}
+            className="p-2 rounded-full text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+            aria-label="Canlı danışıq"
+            title="Canlı danışıq"
+          >
+            <LiveCircleIcon className="w-5 h-5 md:w-6 md:h-6" />
+          </button>
 
           <button
             onClick={handleSend}

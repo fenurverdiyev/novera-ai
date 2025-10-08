@@ -6,6 +6,27 @@ import { RelatedQuery } from './RelatedQuery';
 import { ProtectedImage } from './ProtectedImage';
 
 type NewsCardArticle = SearchNewsItem | NewsArticle;
+
+// Mask-based avatar renderer so any logo can be filled as pure white
+const AiAvatarView: React.FC<{ src: string; className?: string }> = ({ src, className = '' }) => {
+  const style: React.CSSProperties = {
+    WebkitMaskImage: `url(${src})`,
+    maskImage: `url(${src})`,
+    WebkitMaskSize: 'contain',
+    maskSize: 'contain',
+    WebkitMaskRepeat: 'no-repeat',
+    maskRepeat: 'no-repeat',
+    backgroundColor: '#ffffff',
+  };
+  return <div className={`rounded-full ${className}`} style={style} />;
+};
+
+// Minimal white "N" monogram as guaranteed fallback
+const AiMonogram: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <div className={`rounded-full bg-white/10 border border-white/15 flex items-center justify-center ${className}`}>
+    <span className="text-white font-extrabold leading-none select-none" style={{ fontSize: 18 }}>N</span>
+  </div>
+);
 interface MessageDisplayProps {
   message: Message;
   onRelatedQuery: (query: string) => void;
@@ -52,31 +73,7 @@ const formatText = (text: string) => {
     );
   });
 };
-const Stepper: React.FC<{ step?: 1 | 2 | 3 }> = ({ step }) => {
-  const steps = [
-    { id: 1, label: 'Analiz edirəm...' },
-    { id: 2, label: 'Axtarıram...' },
-    { id: 3, label: 'Təqdim edirəm...' },
-  ];
-  return (
-    <div className="mb-3">
-      <div className="flex items-center gap-3">
-        {steps.map((s, idx) => {
-          const active = step ? s.id <= step : false;
-          return (
-            <div key={s.id} className="flex items-center gap-2">
-              <div className={`px-3 py-1 rounded-full text-xs border ${active ? 'bg-accent/20 text-accent border-accent/30' : 'bg-white/5 text-white/70 border-white/10'}`}>
-                <span className={`inline-block w-2 h-2 rounded-full mr-2 ${active ? 'bg-accent animate-pulse' : 'bg-white/30'}`}></span>
-                {s.label}
-              </div>
-              {idx < steps.length - 1 && <div className={`w-6 h-px ${active ? 'bg-accent/50' : 'bg-white/10'}`}></div>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
+// Removed ModernProgress HUD in favor of pure typing effect
 
 const ImagePreview: React.FC<{ url: string }> = ({ url }) => {
     const [hasError, setHasError] = useState(false);
@@ -260,17 +257,63 @@ const ProductCard: React.FC<{ product: ShoppingProduct }> = ({ product }) => {
   );
 };
 
+// Decide if products should be shown for this message
+// Decide if products should be shown for this message
+const shouldShowProducts = (m: Message): boolean => {
+  if (!m.products || m.products.length === 0) return false;
+  if (m.toolCalls && m.toolCalls.some(t => /shop|product|commerce|shopping|amazon|aliexpress/i.test(t.name))) return true;
+  const t = (m.text || '').toLowerCase();
+  const asked = /(məhsul|qiymət|satın|almaq|haradan ala|mağaza|magaza|price|buy|purchase|amazon|aliexpress)/i.test(t);
+  return asked;
+};
+
 export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelatedQuery }) => {
   const isUser = message.role === 'user';
 
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [aiAvatarUrl, setAiAvatarUrl] = useState<string | null>(null);
+  const [aiAvatarError, setAiAvatarError] = useState(false);
+  const [displayText, setDisplayText] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
 
   useEffect(() => {
     try {
       const stored = localStorage.getItem('nov-era-avatar');
       setAvatarUrl(stored);
+      const aiStored = localStorage.getItem('nov-era-ai-avatar');
+      setAiAvatarUrl(aiStored || '/ai-avatar.png');
     } catch {}
   }, []);
+
+  // Preload AI avatar and fall back to monogram if missing
+  useEffect(() => {
+    if (!aiAvatarUrl) { setAiAvatarError(false); return; }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => { if (!cancelled) setAiAvatarError(false); };
+    img.onerror = () => { if (!cancelled) setAiAvatarError(true); };
+    img.src = aiAvatarUrl;
+    return () => { cancelled = true; };
+  }, [aiAvatarUrl]);
+
+  // ChatGPT-like typing effect for model messages
+  useEffect(() => {
+    if (isUser) { setDisplayText(message.text || ''); setIsStreaming(false); return; }
+    const t = message.text || '';
+    if (!t) { setDisplayText(''); setIsStreaming(!!message.isLoading); return; }
+    let i = 0;
+    setDisplayText('');
+    setIsStreaming(true);
+    const interval = 12;
+    const targetMs = Math.max(1300, Math.min(4200, 1400 + t.length * 12)); // adapt by length
+    const step = Math.max(1, Math.round(t.length / Math.max(1, targetMs / interval)));
+    const id = window.setInterval(() => {
+      i = Math.min(t.length, i + step);
+      setDisplayText(t.slice(0, i));
+      if (i >= t.length) { setIsStreaming(false); window.clearInterval(id); }
+    }, interval);
+    return () => window.clearInterval(id);
+  }, [message.text, message.isLoading, isUser]);
 
   return (
     <div className={`py-6 md:py-8 ${isUser ? '' : 'bg-bg-slate/80'}`}>
@@ -278,22 +321,34 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
         <div className="flex-shrink-0">
           {isUser ? (
             avatarUrl ? (
-              <img src={avatarUrl} alt="Profil" className="w-8 h-8 rounded-full object-cover border border-bg-onyx" />
+              <img src={avatarUrl} alt="Profil" className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover border border-white/10 shadow-md" />
             ) : (
               <UserIcon className="w-8 h-8 text-text-sub" />
             )
           ) : (
-            <BotIcon className="w-8 h-8 text-accent" />
+            (aiAvatarUrl && !aiAvatarError) ? (
+              <AiAvatarView
+                src={aiAvatarUrl}
+                className="w-8 h-8 sm:w-10 sm:h-10 border border-white/15 ring-2 ring-white/10 shadow-lg"
+              />
+            ) : (
+              <AiMonogram className="w-8 h-8 sm:w-10 sm:h-10" />
+            )
           )}
         </div>
         <div className="flex-grow">
-          {!isUser && message.progressStep && (
-            <Stepper step={message.progressStep} />
-          )}
-          <div className="max-w-none text-text-main leading-relaxed text-[15px] md:text-base">
-             {formatText(message.text)}
-             {message.isLoading && !message.text && <div className="w-3 h-3 bg-accent animate-pulse rounded-full mt-2"></div>}
+          <div className={`max-w-none text-text-main leading-relaxed text-[15px] md:text-base ${isStreaming ? 'animate-[breath_2.4s_ease-in-out_infinite]' : ''}`}>
+             {formatText(displayText)}
+             {isStreaming && <span className="inline-block w-[6px] h-4 align-[-1px] bg-white/80 rounded-[1px] ml-1 animate-[blink_1.1s_steps(2,_start)_infinite]"></span>}
+             {message.isLoading && !displayText && (
+               <div className="mt-2 space-y-2">
+                 <div className="h-3 rounded-md bg-white/10 animate-pulse" />
+                 <div className="h-3 w-11/12 rounded-md bg-white/10 animate-pulse" />
+                 <div className="h-3 w-8/12 rounded-md bg-white/10 animate-pulse" />
+               </div>
+             )}
           </div>
+          <style>{`@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}} @keyframes breath{0%{opacity:.92}50%{opacity:.65}100%{opacity:.92}}`}</style>
           
           {(message.images && message.images.length > 0) || (message.videos && message.videos.length > 0) ? (
             <div className="mt-6">
@@ -327,7 +382,7 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
             </div>
           )}
 
-          {message.products && message.products.length > 0 && (
+          {shouldShowProducts(message) && (
             <div className="mt-6">
               <h3 className="text-lg font-semibold text-text-main mb-3">Məhsullar</h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">

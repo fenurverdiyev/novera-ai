@@ -1,0 +1,19 @@
+{
+  "_comment": "Left: character ID shown in UI. Right: audio filename to play from /voices/. This maps to recommended English engine names so you can drop your MP3s directly.",
+  "Kamran": "Gacrux.mp3",
+  "Səlim": "Fenrir.mp3",
+  "Selim": "Fenrir.mp3",
+  "Arzu": "Sulafat.mp3",
+  "Leyla": "Zephyr.mp3",
+  "İlkin": "Charon.mp3",
+  "Ilkin": "Charon.mp3",
+  "Fərid": "Puck.mp3",
+  "Farid": "Puck.mp3",
+
+  "Gacrux": "Gacrux.mp3",
+  "Fenrir": "Fenrir.mp3",
+  "Sulafat": "Sulafat.mp3",
+  "Zephyr": "Zephyr.mp3",
+  "Charon": "Charon.mp3",
+  "Puck": "Puck.mp3"
+}

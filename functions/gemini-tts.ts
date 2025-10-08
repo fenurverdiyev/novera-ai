@@ -15,7 +15,11 @@ export default async function handler(request: Request) {
       return new Response(JSON.stringify({ error: "Missing 'text'" }), { status: 400, headers: { 'Content-Type': 'application/json' } });
     }
 
-    const API_KEY = process.env.GEMINI_TTS_API_KEY || process.env.VITE_GEMINI_TTS_API_KEY || '';
+    const API_KEY = process.env.GEMINI_TTS_API_KEY 
+      || process.env.VITE_GEMINI_TTS_API_KEY 
+      || process.env.GEMINI_API_KEY 
+      || process.env.VITE_GEMINI_API_KEY 
+      || '';
     if (!API_KEY) {
       return new Response(JSON.stringify({ error: 'Gemini API key not configured' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     }

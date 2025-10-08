@@ -72,11 +72,21 @@ export const StarryNightAnimation: React.FC<ThemeAnimationProps> = ({ analyserNo
                 audioLevel = sum / (64 * 255);
             }
 
-            ctx.fillStyle = 'rgba(13, 15, 25, 0.15)';
+            // Slightly stronger trail for smooth upward drift
+            ctx.fillStyle = 'rgba(13, 15, 25, 0.2)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             // Draw stars
             stars.forEach(star => {
+                // Upward drift (parallax: larger stars move a bit faster)
+                // Faster base speed + a bit stronger audio reaction
+                const drift = (0.16 + audioLevel * 0.9) * (0.7 + star.size * 0.6);
+                star.y -= drift;
+                if (star.y < -2) {
+                    star.y = canvas.height + 2;
+                    star.x = Math.random() * canvas.width;
+                }
+
                 const currentAlpha = star.alpha * (0.7 + Math.sin(frameCount * star.flickerSpeed + star.x) * 0.3);
                 ctx.fillStyle = `rgba(255, 255, 255, ${currentAlpha})`;
                 ctx.beginPath();

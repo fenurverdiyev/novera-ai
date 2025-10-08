@@ -13,7 +13,9 @@ export const Profile: React.FC = () => {
 
   const [profile, setProfile] = React.useState<UserProfile>({ name: '', email: '' });
   const [avatar, setAvatar] = React.useState<string | null>(null);
+  const [aiAvatar, setAiAvatar] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
+  const [savingAi, setSavingAi] = React.useState(false);
   const [message, setMessage] = React.useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   
   // Password change state
@@ -31,6 +33,7 @@ export const Profile: React.FC = () => {
 
   // Avatar upload ref for custom button
   const avatarInputRef = React.useRef<HTMLInputElement>(null);
+  const aiAvatarInputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     try {
@@ -38,14 +41,66 @@ export const Profile: React.FC = () => {
       if (authRaw) setAuthEmail(authRaw);
       const pRaw = localStorage.getItem('nov-era-profile');
       const aRaw = localStorage.getItem('nov-era-avatar');
+      const aiRaw = localStorage.getItem('nov-era-ai-avatar');
       if (pRaw) setProfile(JSON.parse(pRaw));
       if (aRaw) setAvatar(aRaw);
+      if (aiRaw) setAiAvatar(aiRaw);
     } catch {}
   }, []);
 
   const showMessage = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
     setMessage({ text, type });
     setTimeout(() => setMessage(null), 3000);
+  };
+
+  const handleAiAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setSavingAi(true);
+      const dataUrl = await fileToDataUrl(file);
+      const small = await resizeDataUrl(dataUrl, 256);
+      const whiteMask = await toWhiteMaskPng(small);
+      setAiAvatar(whiteMask);
+      localStorage.setItem('nov-era-ai-avatar', whiteMask);
+      showMessage('AI avatar yeniləndi!', 'success');
+    } catch {
+      showMessage('AI avatar yükləmə zamanı xəta baş verdi.', 'error');
+    } finally {
+      setSavingAi(false);
+    }
+
+  // Convert any image to white silhouette with transparent background using luminance as alpha
+  async function toWhiteMaskPng(dataUrl: string): Promise<string> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const w = img.width; const h = img.height;
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(dataUrl);
+        ctx.drawImage(img, 0, 0, w, h);
+        const imgData = ctx.getImageData(0, 0, w, h);
+        const d = imgData.data;
+        // Compute alpha from luminance; darker background -> alpha ~0, bright logo -> alpha ~1
+        const threshold = 24; // ignore near-black
+        const scale = 255 / (255 - threshold);
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+          let a = (lum - threshold) * scale; // 0..255
+          if (a < 0) a = 0; if (a > 255) a = 255;
+          d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = a;
+        }
+        ctx.putImageData(imgData, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  }
   };
 
   const handleChange = (key: keyof UserProfile, value: string) => {
@@ -201,6 +256,14 @@ export const Profile: React.FC = () => {
     try { 
       localStorage.removeItem('nov-era-avatar'); 
       showMessage('Avatar silindi.', 'info');
+    } catch {}
+  };
+
+  const handleRemoveAiAvatar = () => {
+    setAiAvatar(null);
+    try {
+      localStorage.removeItem('nov-era-ai-avatar');
+      showMessage('AI avatar silindi.', 'info');
     } catch {}
   };
 
@@ -405,6 +468,48 @@ export const Profile: React.FC = () => {
                         >
                           🗑️ Şəkili sil
                         </button>
+                      </div>
+                    </div>
+
+                    {/* AI Avatar Section */}
+                    <div className="w-full mt-6 p-4 rounded-2xl bg-white/5 border border-white/10">
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className="w-10 h-10 rounded-full bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-xl">🤖</div>
+                        <div>
+                          <div className="font-semibold text-white">AI Avatar (NovEra)</div>
+                          <div className="text-white/70 text-sm">AI cavablarında görünəcək logo</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="w-16 h-16 rounded-full overflow-hidden border border-cyan-400/40 bg-black/30 flex items-center justify-center">
+                          {aiAvatar ? <img src={aiAvatar} alt="AI avatar" className="w-full h-full object-cover"/> : <span className="text-2xl">✨</span>}
+                        </div>
+                        <div className="flex-1 flex gap-3">
+                          <input
+                            ref={aiAvatarInputRef}
+                            type="file"
+                            accept="image/*"
+                            onChange={handleAiAvatarChange}
+                            className="hidden"
+                            disabled={savingAi}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => aiAvatarInputRef.current?.click()}
+                            disabled={savingAi}
+                            className="flex-1 min-w-[140px] bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 disabled:opacity-50 text-white font-semibold py-3 px-6 rounded-2xl transition-all duration-300 shadow-lg"
+                          >
+                            📤 Logo Yüklə
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleRemoveAiAvatar}
+                            disabled={savingAi || !aiAvatar}
+                            className="flex-1 min-w-[140px] bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-500 hover:to-orange-500 disabled:opacity-50 text-white font-semibold py-3 px-6 rounded-2xl transition-all duration-300 shadow-lg"
+                          >
+                            🗑️ Sil
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
