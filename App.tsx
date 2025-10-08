@@ -83,6 +83,7 @@ const App: React.FC = () => {
     return () => clearTimeout(timer);
   }, []);
 
+  
   // Listen for global "clear all history" requests from Sidebar's button
   useEffect(() => {
     const handleClearAll = () => {
@@ -442,8 +443,8 @@ const App: React.FC = () => {
 
   const renderView = () => {
     switch (activeView) {
-        case 'browser': return <BrowserView />;
-        case 'google-search': return <GoogleSearchView />;
+        case 'browser': return <BrowserView onVisualQuery={(q, imgs) => handleSend(q, imgs)} />;
+        case 'google-search': return <BrowserView onVisualQuery={(q, imgs) => handleSend(q, imgs)} />;
         case 'news': return <News themeColor={activeThemeColor} />;
         case 'weather': return <Weather />;
         case 'translate': return <Translate />;

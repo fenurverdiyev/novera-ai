@@ -1,9 +1,13 @@
 import path from 'path';
+import fs from 'fs';
 import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     const SERPER_API_KEY = env.SERPER_API_KEY || env.VITE_SERPER_API_KEY || env.VITE_SERPAPI_KEY;
+    const PUBLIC_HOST = env.VITE_PUBLIC_HOST; // e.g. abcdef.ngrok-free.app
+    const HTTPS_KEY_PATH = env.VITE_HTTPS_KEY; // e.g. d:/NovEra/certs/server-key.pem
+    const HTTPS_CERT_PATH = env.VITE_HTTPS_CERT; // e.g. d:/NovEra/certs/server.pem
 
     // Dev-only proxy for Serper. In production, deploy a serverless endpoint with identical behavior.
     const serperProxyPlugin = {
@@ -110,6 +114,12 @@ export default defineConfig(({ mode }) => {
         });
       }
     };
+    const hmrOptions = PUBLIC_HOST ? {
+      host: PUBLIC_HOST,
+      protocol: 'wss' as const,
+      clientPort: 443,
+    } : undefined;
+
     return {
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
@@ -123,8 +133,10 @@ export default defineConfig(({ mode }) => {
         }
       },
       server: {
-        host: true, 
-        port: 5175, 
+        host: true,
+        port: 5175,
+        strictPort: true,
+        cors: true,
         allowedHosts: [
           '.ngrok.io',
           '.ngrok-free.app',
@@ -133,7 +145,11 @@ export default defineConfig(({ mode }) => {
           '127.0.0.1',
           '192.168.100.41',
           '72dceb2359d7.ngrok-free.app'
-        ]
+        ],
+        hmr: hmrOptions,
+        ...(HTTPS_KEY_PATH && HTTPS_CERT_PATH && fs.existsSync(HTTPS_KEY_PATH) && fs.existsSync(HTTPS_CERT_PATH)
+          ? { https: { key: fs.readFileSync(HTTPS_KEY_PATH), cert: fs.readFileSync(HTTPS_CERT_PATH) } }
+          : {})
       },
       plugins: [serperProxyPlugin, ttsProxyPlugin]
     };
