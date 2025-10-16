@@ -57,7 +57,7 @@ export interface ShoppingProduct {
   imageUrl?: string;
 }
 
-export type AppView = 'search' | 'google-search' | 'browser' | 'news' | 'weather' | 'translate' | 'settings' | 'profile' | 'live';
+export type AppView = 'search' | 'google-search' | 'browser' | 'news' | 'weather' | 'translate' | 'settings' | 'profile' | 'live' | 'safe-search' | 'incognito';
 
 export type SearchMode = 'base' | 'universe';
 

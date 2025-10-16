@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => {
     const PUBLIC_HOST = env.VITE_PUBLIC_HOST; // e.g. abcdef.ngrok-free.app
     const HTTPS_KEY_PATH = env.VITE_HTTPS_KEY; // e.g. d:/NovEra/certs/server-key.pem
     const HTTPS_CERT_PATH = env.VITE_HTTPS_CERT; // e.g. d:/NovEra/certs/server.pem
+    const USE_TTS_PROXY = env.VITE_TTS_PROXY === '1';
 
     // Dev-only proxy for Serper. In production, deploy a serverless endpoint with identical behavior.
     const serperProxyPlugin = {
@@ -49,10 +50,42 @@ export default defineConfig(({ mode }) => {
       }
     };
 
+    const liveProxyPlugin = {
+      name: 'browserless-live-proxy',
+      configureServer(server: any) {
+        server.middlewares.use('/api/open', async (req: any, res: any) => {
+          try {
+            if (req.method !== 'POST') { res.statusCode = 405; res.end('Method Not Allowed'); return; }
+            let body = '';
+            await new Promise<void>((resolve) => { req.on('data', (c: any) => body += c); req.on('end', resolve); });
+            const { url } = JSON.parse(body || '{}');
+            if (!url || typeof url !== 'string') { res.statusCode = 400; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: 'missing_url' })); return; }
+
+            const BROWSERLESS_WSS = env.BROWSERLESS_WSS || env.VITE_BROWSERLESS_WSS || '';
+            if (!BROWSERLESS_WSS) { res.statusCode = 500; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: 'browserless_not_configured' })); return; }
+
+            const mod: any = await import('puppeteer-core');
+            const puppeteer: any = mod.default ?? mod;
+            const browser = await puppeteer.connect({ browserWSEndpoint: BROWSERLESS_WSS });
+            const page = await browser.newPage();
+            await page.goto(url, { waitUntil: 'networkidle0' });
+            const client = await page.createCDPSession();
+            const resp = await client.send('Browserless.liveURL', { interactive: true, showBrowserInterface: false, quality: 80 });
+            const liveURL = resp?.liveURL || '';
+            if (!liveURL) { res.statusCode = 500; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: 'no_live_url' })); return; }
+            res.statusCode = 200; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ liveURL }));
+          } catch (e: any) {
+            res.statusCode = 500; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: 'liveurl_error', message: e?.message || 'Unknown error' }));
+          }
+        });
+      }
+    };
+
     // Dev-only proxy for Gemini TTS so the client can call /api/gemini-tts
     const ttsProxyPlugin = {
       name: 'gemini-tts-proxy',
       configureServer(server: any) {
+        if (!USE_TTS_PROXY) return; // disabled unless explicitly enabled via env
         server.middlewares.use('/api/gemini-tts', async (req: any, res: any) => {
           try {
             if (req.method !== 'POST') { res.statusCode = 405; res.end('Method Not Allowed'); return; }
@@ -140,6 +173,7 @@ export default defineConfig(({ mode }) => {
         allowedHosts: [
           '.ngrok.io',
           '.ngrok-free.app',
+          '.ngrok-free.dev',
           '.ngrok.app',
           'localhost',
           '127.0.0.1',
@@ -149,8 +183,20 @@ export default defineConfig(({ mode }) => {
         hmr: hmrOptions,
         ...(HTTPS_KEY_PATH && HTTPS_CERT_PATH && fs.existsSync(HTTPS_KEY_PATH) && fs.existsSync(HTTPS_CERT_PATH)
           ? { https: { key: fs.readFileSync(HTTPS_KEY_PATH), cert: fs.readFileSync(HTTPS_CERT_PATH) } }
-          : {})
+          : {}),
+        proxy: {
+          '/api': {
+            target: 'http://localhost:8000',
+            changeOrigin: true,
+            secure: false,
+            ws: false,
+          },
+        }
       },
-      plugins: [serperProxyPlugin, ttsProxyPlugin]
+      plugins: [
+        serperProxyPlugin,
+        ...(USE_TTS_PROXY ? [ttsProxyPlugin] : []),
+        liveProxyPlugin,
+      ]
     };
 });

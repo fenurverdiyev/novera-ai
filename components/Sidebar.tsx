@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import type { AppView, Message } from '../types';
 import { SearchIcon, NewsIcon, WeatherIcon, TranslateIcon, SettingsIcon, UserIcon, PlusIcon, SparklesIcon, BookmarkIcon, CloseIcon, GlobeIcon } from './Icons';
+
 import { Logo } from './Logo';
 
 interface SidebarProps {
@@ -29,6 +30,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
   const [sessions, setSessions] = useState<Session[]>([]);
   const [contextId, setContextId] = useState<number | null>(null);
   const [contextPos, setContextPos] = useState<{ x: number; y: number } | null>(null);
+  
   const longPressRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -38,6 +40,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
     } catch {}
   }, []);
 
+  
+
   const refreshSessions = () => {
     try {
       const raw = localStorage.getItem('nov-era-sessions');
@@ -45,6 +49,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
       setSessions(list);
     } catch { setSessions([]); }
   };
+
+  
 
   useEffect(() => {
     refreshSessions();

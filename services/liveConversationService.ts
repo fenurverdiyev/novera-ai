@@ -105,3 +105,7 @@ export async function stopMic(): Promise<void> {
 export function isMicActive(): boolean {
   return !!(audioCtx && (audioCtx.state === 'running') && mediaStream);
 }
+
+export function getSampleRate(): number {
+  try { return audioCtx?.sampleRate || 48000; } catch { return 48000; }
+}

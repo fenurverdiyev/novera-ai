@@ -16,8 +16,8 @@ const cacheKey = (
   endpoint: string,
   query: string,
   num: number,
-  opts: { gl?: string; hl?: string } = {}
-) => `${endpoint}::${query}::${num}::${opts.gl || ''}::${opts.hl || ''}`;
+  opts: { gl?: string; hl?: string; page?: number } = {}
+) => `${endpoint}::${query}::${num}::${opts.gl || ''}::${opts.hl || ''}::${opts.page || 1}`;
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 // Basic safety filters to avoid NSFW/suspicious links
@@ -63,7 +63,7 @@ async function callSerperApi(
   endpoint: 'search' | 'images' | 'videos' | 'places' | 'news' | 'shopping' | 'autocomplete',
   query: string,
   num: number,
-  opts: { gl?: string; hl?: string } = {}
+  opts: { gl?: string; hl?: string; page?: number } = {}
 ) {
   if (!SERPER_API_KEY) {
     console.error("Serper API key not found. Will try proxy fallbacks.");
@@ -85,7 +85,7 @@ async function callSerperApi(
           'X-API-KEY': SERPER_API_KEY,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ q: query, num, ...(glLower ? { gl: glLower } : {}), ...(hlLower ? { hl: hlLower } : {}), }),
+        body: JSON.stringify({ q: query, num, page: (opts.page || 1), ...(glLower ? { gl: glLower } : {}), ...(hlLower ? { hl: hlLower } : {}), }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -173,7 +173,7 @@ export function detectLocaleForSearch(): { hl: string; gl: string } {
 export interface SerperOrganicResult { title: string; link: string; snippet: string; date?: string }
 export interface SerperResponse { organic: SerperOrganicResult[] }
 
-export async function searchWeb(query: string, num = 8, opts?: { gl?: string; hl?: string }): Promise<SerperResponse | null> {
+export async function searchWeb(query: string, num = 8, opts?: { gl?: string; hl?: string; page?: number }): Promise<SerperResponse | null> {
   const data = await callSerperApi('search', query, num, opts);
   if (!data) return null;
   const organic = (data.organic || []).map((r: any) => ({

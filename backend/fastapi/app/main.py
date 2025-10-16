@@ -5,6 +5,8 @@ NovEra TTS Backend (LOVO)
 import os
 import base64
 import asyncio
+import io
+import wave
 from typing import Optional, Any, Dict
 
 from fastapi import FastAPI, HTTPException, Query
@@ -33,6 +35,9 @@ if not LOVO_API_KEY:
 
 # Gemini API (prefer dedicated translate key, fallback to generic)
 TRANSLATE_API_KEY = os.getenv("GEMINI_TRANSLATE_API_KEY") or os.getenv("GEMINI_API_KEY")
+# Gemini TTS API Key (prefer dedicated, fallback to generic)
+GEMINI_TTS_API_KEY = os.getenv("GEMINI_TTS_API_KEY") or os.getenv("GEMINI_API_KEY")
+GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
 if TRANSLATE_API_KEY:
     try:
         import google.generativeai as genai
@@ -43,11 +48,19 @@ if TRANSLATE_API_KEY:
 else:
     print("Warning: GEMINI_TRANSLATE_API_KEY/GEMINI_API_KEY is not set. Translate endpoint will not work.")
 
+# Gemini Live (ephemeral tokens) using new 'google-genai' SDK if available
+GENAI_LIVE_AVAILABLE = False
+try:
+    from google import genai as genai_live  # type: ignore
+    GENAI_LIVE_AVAILABLE = True
+except Exception:
+    GENAI_LIVE_AVAILABLE = False
+
 app = FastAPI(title="NovEra Backend", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS or ["*"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,6 +77,24 @@ class TTSRequest(BaseModel):
     text: str
     voice_id: Optional[str] = None  # LOVO speaker id
     output_format: Optional[str] = "mp3_44100_128"  # kept for compat; LOVO returns mp3 by default
+
+
+class GeminiTTSRequest(BaseModel):
+    text: str
+    voice_name: Optional[str] = "Kore"
+    sample_rate: Optional[int] = 24000
+    channels: Optional[int] = 1
+
+
+def pcm_to_wav_bytes(pcm: bytes, *, channels: int = 1, rate: int = 24000, sample_width: int = 2) -> bytes:
+    """Wrap raw PCM (s16le) into WAV container and return bytes."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(rate)
+        wf.writeframes(pcm)
+    return buf.getvalue()
 
 
 async def lovo_tts_bytes(*, text: str, speaker_id: str, poll_timeout: float = 60.0) -> bytes:
@@ -233,3 +264,107 @@ async def translate(req: TranslateRequest):
     except Exception as e:
         print(f"Gemini translation error: {e}")
         raise HTTPException(status_code=502, detail="Failed to translate text with Gemini API.")
+
+
+@app.post("/api/gemini-live-token")
+async def gemini_live_token():
+    """Provision a short-lived ephemeral token for Gemini Live API client-side WebSocket connections.
+
+    Returns: { token: string }
+    """
+    if not GEMINI_TTS_API_KEY and not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(status_code=503, detail="Gemini API key is not configured on the server.")
+    if not GENAI_LIVE_AVAILABLE:
+        raise HTTPException(status_code=503, detail="google-genai package not installed on server.")
+
+    try:
+        # Create client with v1alpha for ephemeral auth tokens
+        client = genai_live.Client(http_options={"api_version": "v1alpha"})
+        # Create token with defaults: uses:1, expireTime: +30min, newSessionExpireTime: +1min
+        token = await asyncio.to_thread(client.auth_tokens.create, {  # type: ignore
+            "config": {
+                "uses": 1,
+                "http_options": {"api_version": "v1alpha"},
+            }
+        })
+        name = getattr(token, "name", None) or token.get("name") if isinstance(token, dict) else None
+        if not name:
+            raise HTTPException(status_code=502, detail="Failed to issue ephemeral token")
+        return JSONResponse({"token": name})
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Gemini Live token error: {e}")
+        raise HTTPException(status_code=502, detail="Failed to create ephemeral token")
+
+
+@app.post("/api/gemini-tts")
+async def gemini_tts(req: GeminiTTSRequest, format: str = Query("binary", pattern="^(binary|base64)$")):
+    """Synthesize speech using Gemini TTS via REST. Returns audio/wav or base64.
+
+    Request body:
+      { "text": str, "voice_name": str = "Kore", "sample_rate": 24000, "channels": 1 }
+    """
+    if not GEMINI_TTS_API_KEY:
+        raise HTTPException(status_code=503, detail="Gemini TTS is not configured on the server.")
+
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="'text' is required")
+
+    voice_name = (req.voice_name or "Kore").strip() or "Kore"
+    sample_rate = int(req.sample_rate or 24000)
+    channels = int(req.channels or 1)
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TTS_MODEL}:generateContent"
+    headers = {"x-goog-api-key": GEMINI_TTS_API_KEY, "Content-Type": "application/json"}
+    payload: Dict[str, Any] = {
+        "contents": [{"parts": [{"text": text}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {"voiceName": voice_name}
+                }
+            },
+        },
+        "model": GEMINI_TTS_MODEL,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0)) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=resp.status_code, detail=f"Gemini TTS error: {resp.text}")
+            data = resp.json()
+
+        # Extract base64 PCM data (inlineData.data)
+        try:
+            parts = (
+                data.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])
+            )
+            inline = parts[0].get("inlineData") or parts[0].get("inline_data") or {}
+            b64 = inline.get("data")
+        except Exception:
+            b64 = None
+
+        if not b64 or not isinstance(b64, str):
+            raise HTTPException(status_code=502, detail="Gemini TTS returned no audio data")
+
+        try:
+            pcm_bytes = base64.b64decode(b64)
+        except Exception:
+            raise HTTPException(status_code=502, detail="Failed to decode Gemini TTS audio data")
+
+        wav_bytes = pcm_to_wav_bytes(pcm_bytes, channels=channels, rate=sample_rate, sample_width=2)
+
+        if format == "base64":
+            return JSONResponse({"audio_base64": base64.b64encode(wav_bytes).decode("utf-8"), "mimeType": "audio/wav"})
+        return Response(content=wav_bytes, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Gemini TTS exception: {e}")
+        raise HTTPException(status_code=502, detail="Failed to synthesize speech with Gemini API.")

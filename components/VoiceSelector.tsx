@@ -35,13 +35,13 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
     s
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
-      .replace(/Д±/g, 'i').replace(/Д°/g, 'I')
-      .replace(/Й™/g, 'e').replace(/ЖЏ/g, 'E')
-      .replace(/Г¶/g, 'o').replace(/Г–/g, 'O')
-      .replace(/Гј/g, 'u').replace(/Гњ/g, 'U')
-      .replace(/Г§/g, 'c').replace(/Г‡/g, 'C')
-      .replace(/Еџ/g, 's').replace(/Ећ/g, 'S')
-      .replace(/Дџ/g, 'g').replace(/Дћ/g, 'G');
+      .replace(/ı/g, 'i').replace(/İ/g, 'I')
+      .replace(/ə/g, 'e').replace(/Ə/g, 'E')
+      .replace(/ö/g, 'o').replace(/Ö/g, 'O')
+      .replace(/ü/g, 'u').replace(/Ü/g, 'U')
+      .replace(/ç/g, 'c').replace(/Ç/g, 'C')
+      .replace(/ş/g, 's').replace(/Ş/g, 'S')
+      .replace(/ğ/g, 'g').replace(/Ğ/g, 'G');
 
   const preferredPreviewFor = (id: string): string | null => {
     const m = voiceCharacterMap[id as keyof typeof voiceCharacterMap];
@@ -74,7 +74,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
 
   // NOTE: Upload removed per request
 
-  // Obraz profillЙ™ri (browser TTS fallback ГјГ§Гјn)
+  // Obraz profilləri (browser TTS fallback üçün)
   const voiceProfile: Record<string, { pitch: number; rate: number }> = {
     Gacrux: { pitch: 0.85, rate: 0.95 },
     Fenrir: { pitch: 1.35, rate: 1.12 },
@@ -138,7 +138,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
     return () => window.clearTimeout(t);
   }, [slideDir]);
 
-  // DinlЙ™ Г¶nizlЙ™mЙ™
+  // Dinlə önizləmə
   const handlePlayPreview = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setPlayError(null);
@@ -173,7 +173,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
       }
     } catch {}
 
-    // 1) Lokal nГјmunЙ™lЙ™r (manifest.json vЙ™ ya auto-adlandД±rma)
+    // 1) Lokal nümunələr (manifest.json və ya auto-adlandırma)
     try {
       const candidates = localCandidatesFor(id);
       if (!audioRef.current) audioRef.current = new Audio();
@@ -238,12 +238,12 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
     }
   };
 
-  // AГ§Д±q olanda lokal nГјmunЙ™lЙ™ri prefetch et
+  // Açıq olanda lokal nümunələri prefetch et
   useEffect(() => {
     if (!isOpen) return;
     setAssetVer(Date.now());
     let mounted = true;
-    // Manifest yГјklЙ™ (opsional)
+    // Manifest yüklə (opsional)
     (async () => {
       try {
         const resp = await fetch('/voices/manifest.json', { cache: 'no-store' });
@@ -276,7 +276,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
     return () => { mounted = false; };
   }, [isOpen, voices]);
 
-  // Body scroll kilidi vЙ™ gГ¶rГјnГјЕџ
+  // Body scroll kilidi və görünüş
   useEffect(() => {
     if (!isOpen) return;
     const prev = document.documentElement.style.overflow;

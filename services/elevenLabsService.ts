@@ -47,6 +47,19 @@ export const AVAILABLE_VOICES: Voice[] = [
     { id: 'yoZ06aMxZJJ28mfd3POQ', name: 'Sam', category: 'premade' },
 ];
 
+// Accept internal voice ids from Live UI (Zephyr, Sulafat, etc.) and map to ElevenLabs ids
+const INTERNAL_TO_ELEVEN: Record<string, string> = {
+    // female warm
+    Sulafat: 'TX3LPaxmHKxFdv7VOQHJ', // Bella
+    Zephyr:  'EXAVITQu4vr4xnSDxMaL', // Bella alt
+    // male voices
+    Gacrux:  'ErXwobaYiN019PkySvjV', // Antoni
+    Puck:    'VR6AewLTigWG4xSOukaG', // Arnold
+    Charon:  'pNInz6obpgDQGcFmaJgB', // Adam
+    Fenrir:  'yoZ06aMxZJJ28mfd3POQ', // Sam
+};
+const normalizeVoiceId = (id: string): string => INTERNAL_TO_ELEVEN[id] || id;
+
 /**
  * Converts text to speech using ElevenLabs API
  * @param text The text to convert to speech
@@ -61,6 +74,7 @@ export async function textToSpeech(
     stability: number = 0.5,
     similarityBoost: number = 0.75
 ): Promise<string | null> {
+    voiceId = normalizeVoiceId(voiceId);
     if (!ELEVENLABS_API_KEY) {
         // Try proxy instead of disabling completely
         return await callProxy(text, voiceId);
@@ -146,6 +160,7 @@ export async function textToSpeechStream(
     text: string,
     voiceId: string = AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ'
 ): Promise<string | null> {
+    voiceId = normalizeVoiceId(voiceId);
     if (!ELEVENLABS_API_KEY) {
         console.warn('ElevenLabs API key not available');
         return null;
@@ -201,7 +216,8 @@ export async function batchTextToSpeech(
     textChunks: string[],
     voiceId: string = AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ'
 ): Promise<(string | null)[]> {
-    const promises = textChunks.map(chunk => textToSpeech(chunk, voiceId));
+    const resolved = normalizeVoiceId(voiceId);
+    const promises = textChunks.map(chunk => textToSpeech(chunk, resolved));
     return Promise.all(promises);
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { textToSpeech } from '../services/elevenLabsService';
+import { geminiTts } from '../services/geminiTtsService';
 
 export interface QueueItem {
   text: string;
@@ -40,7 +40,7 @@ export function useAudioQueue(voiceId?: string, preloadCount: number = 3) {
       const item = items[i];
       if (!item) return;
       try {
-        const url = await textToSpeech(item.text, voiceId);
+        const url = await geminiTts(item.text);
         urlsRef.current.push(url);
         setQueue(prev => prev.map((it, idx) => idx === i ? { ...it, url, isLoaded: true } : it));
       } catch {}
@@ -60,7 +60,7 @@ export function useAudioQueue(voiceId?: string, preloadCount: number = 3) {
     let url = item.url;
     if (!url && !item.isLoaded) {
       try {
-        url = await textToSpeech(item.text, voiceId);
+        url = await geminiTts(item.text);
         urlsRef.current.push(url);
         setQueue(prev => prev.map((it, idx) => idx === next ? { ...it, url, isLoaded: true } : it));
       } catch {
@@ -77,7 +77,7 @@ export function useAudioQueue(voiceId?: string, preloadCount: number = 3) {
     // background preload further ahead
     const ahead = next + preloadCount;
     if (queue[ahead] && !queue[ahead].isLoaded) {
-      textToSpeech(queue[ahead].text, voiceId).then(u => {
+      geminiTts(queue[ahead].text).then(u => {
         if (u) {
           urlsRef.current.push(u);
           setQueue(prev => prev.map((it, idx) => idx === ahead ? { ...it, url: u, isLoaded: true } : it));

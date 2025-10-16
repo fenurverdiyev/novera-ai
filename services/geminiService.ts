@@ -54,41 +54,63 @@ export async function* streamChatQuery(
     images: string[] = [],
     memory?: string,
     forceGrounding?: boolean,
+    analysisOnly?: boolean,
 ): AsyncGenerator<{ text?: string; sources?: Source[], images?: string[], videos?: string[], toolCalls?: any[] }> {
     if (!ai) {
         // Graceful fallback when no API key is provided
-        yield { text: 'AI cavabД± hazД±rda aktiv deyil (VITE_GEMINI_API_KEY qurulmayД±b). ZЙ™hmЙ™t olmasa ayarlarda API aГ§arД±nД± Й™lavЙ™ edin.' };
+        yield { text: 'AI cavabı hazırda aktiv deyil (VITE_GEMINI_API_KEY qurulmayıb). Zəhmət olmasa ayarlarda API açarını əlavə edin.' };
         return;
     }
     const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
-    const systemInstruction =
-      "Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver. " +
-      "İstifadəçi vizual (şəkil/video) istəyirsə, MÜTLƏQ `webSearch` alətini çağır və nəticələrin URL-lərini səthə çıxar. " +
-      "Alətdən istifadə etmədən vizual məzmun haqqında şərh vermə." +
-      memoryBlock;
+    const baseInstruction = "Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver. ";
+    const systemInstruction = analysisOnly
+      ? (
+        baseInstruction +
+        "Bu sorğu yalnız şəkil/mətn ANALİZİNƏ yönəlib. Heç bir veb axtarış alətindən istifadə ETMƏ. Heç bir şəkil generasiyası ETMƏ. " +
+        "Verilən şəkil(lər) və mətn əsasında cavab ver; lazım olsa strukturlu JSON qaytara bilərsən." +
+        memoryBlock
+      )
+      : (
+        baseInstruction +
+        "İstifadəçi vizual (şəkil/video) istəyirsə, MÜTLƏQ `webSearch` alətini çağır və nəticələrin URL-lərini səthə çıxar. " +
+        "Alətdən istifadə etmədən vizual məzmun haqqında şərh vermə." +
+        memoryBlock
+      );
     
     const historicContent = mapMessagesToContent(history);
     
-    const userParts: ({ text: string } | { inlineData: { mimeType: string; data: string } })[] = [{ text: prompt }];
+    const userParts: ({ text: string } | { inlineData: { mimeType: string; data: string } })[] = [];
     if (images.length > 0) {
-        images.forEach(imgData => {
-            userParts.push({
-                inlineData: {
-                    mimeType: 'image/jpeg',
-                    data: imgData.split(',')[1],
-                }
-            });
-        });
+      // Put images first, then the text prompt (improves multimodal grounding)
+      for (const imgData of images) {
+        try {
+          const mimeMatch = imgData.match(/^data:([^;]+);base64,/i);
+          const mimeType = mimeMatch?.[1] || 'image/jpeg';
+          const base64Match = imgData.match(/^data:[^;]+;base64,(.*)$/i);
+          const data = (base64Match?.[1] || imgData).trim();
+          userParts.push({ inlineData: { mimeType, data } });
+        } catch {
+          userParts.push({ inlineData: { mimeType: 'image/jpeg', data: (imgData.split(',')[1] || imgData).trim() } });
+        }
+      }
     }
+    userParts.push({ text: prompt });
 
     const contents: Content[] = [...historicContent, { role: 'user', parts: userParts }];
 
     let responseStream: any;
+    const pickModel = () => {
+      // Keep a single, stable model to avoid availability errors
+      return model; // 'gemini-2.5-flash'
+    };
+    const useModel = pickModel();
     try {
       responseStream = await ai.models.generateContentStream({
-        model,
+        model: useModel,
         contents,
-        config: {
+        config: analysisOnly ? {
+          systemInstruction,
+        } : {
           tools: [googleSearchTool, ...assistantTools],
           systemInstruction,
         },
@@ -97,9 +119,9 @@ export async function* streamChatQuery(
       // Fallback: non-streaming single shot to return something fast and stable
       try {
         const fallback = await ai.models.generateContent({
-          model,
+          model: useModel,
           contents,
-          config: { tools: [googleSearchTool], systemInstruction },
+          config: analysisOnly ? { systemInstruction } : { tools: [googleSearchTool], systemInstruction },
         });
         const text = fallback.text?.trim();
         const groundingChunks = (fallback as any).candidates?.[0]?.groundingMetadata?.groundingChunks || [];
@@ -229,7 +251,7 @@ Return the questions as a JSON array of strings.`;
  * @returns A summary of the article.
  */
 export async function analyzeNewsArticle(article: NewsArticle): Promise<string> {
-    if (!ai) return "AI tЙ™hlili hazД±rda Й™lГ§atmazdД±r. XahiЕџ edirik sonra yenidЙ™n cЙ™hd edin.";
+    if (!ai) return "AI təhlili hazırda əlçatmazdır. Xahiş edirik sonra yenidən cəhd edin.";
     try {
         const prompt = `Please analyze the following news article. Provide a concise, neutral summary covering the key points, any potential biases detected, and the wider implications of the story.
         IMPORTANT: Your entire response MUST be in the Azerbaijani language.
@@ -247,7 +269,7 @@ Return the analysis as a single block of text.`;
         return response.text.trim();
     } catch (error) {
         console.error("Error analyzing news article:", error);
-        return "MЙ™qalЙ™ tЙ™hlil edilЙ™rkЙ™n xЙ™ta baЕџ verdi.";
+        return "Məqalə təhlil edilərkən xəta baş verdi.";
     }
 }
 
@@ -259,7 +281,7 @@ Return the analysis as a single block of text.`;
 export async function getWeather(location: string): Promise<WeatherData> {
     try {
         if (!ai) {
-            throw new Error('AI aГ§arД± yoxdur. Hava mЙ™lumatД± ГјГ§Гјn Open-Meteo modulundan istifadЙ™ edin.');
+            throw new Error('AI açarı yoxdur. Hava məlumatı üçün Open-Meteo modulundan istifadə edin.');
         }
         const response = await ai.models.generateContent({
             model,
@@ -268,7 +290,7 @@ export async function getWeather(location: string): Promise<WeatherData> {
             Return the result as a single, valid JSON object.
             If the location is found, the JSON object must have a "success" key set to true, and a "data" key containing the weather information with this structure:
             { "location": "City, Country", "current": { "temp": number, "condition": "string" }, "forecast": [ { "day": "string", "temp": number, "condition": "string" }, ... ] }
-            If the location is not found or is ambiguous, the JSON object must have a "success" key set to false, and an "error" key with a message like "MЙ™kan tapД±lmadД±".
+            If the location is not found or is ambiguous, the JSON object must have a "success" key set to false, and an "error" key with a message like "Məkan tapılmadı".
             Do not include any text, markdown, or commentary outside of the JSON object.`,
             config: {
                 responseMimeType: "application/json",
@@ -322,14 +344,14 @@ export async function getWeather(location: string): Promise<WeatherData> {
         }
 
         // If we reach here, the response is malformed.
-        throw new Error("Hava mЙ™lumatД± ГјГ§Гјn natamam cavab alД±ndД±.");
+        throw new Error("Hava məlumatı üçün natamam cavab alındı.");
 
     } catch (error) {
         console.error("Error fetching weather:", error);
         if (error instanceof Error) {
             throw error;
         }
-        throw new Error("Hava mЙ™lumatД± Й™ldЙ™ edilЙ™rkЙ™n namЙ™lum xЙ™ta baЕџ verdi.");
+        throw new Error("Hava məlumatı əldə edilərkən naməlum xəta baş verdi.");
     }
 }
 
@@ -414,13 +436,13 @@ ${text.slice(0, 6000)}
  * This does not stream; it performs a single request for simplicity.
  */
 export async function answerWithGroundedSearch(query: string, opts?: { num?: number; gl?: string; hl?: string }, memory?: string) {
-  const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAЕћ (kontekstЙ™ kГ¶mЙ™k ГјГ§Гјn):\n${memory.slice(-1500)}` : '';
-  const systemInstruction = `SЙ™n NovEra adlД± kГ¶mЙ™kГ§isЙ™n vЙ™ bГјtГјn cavablarД±nД± AzЙ™rbaycan dilindЙ™ ver.\n\n` +
-    `Cavab verЙ™rkЙ™n Google AxtarД±Еџ alЙ™tindЙ™n (grounding) istifadЙ™ et, iddialarД± Й™n son mЙ™nbЙ™lЙ™rlЙ™ dЙ™stЙ™klЙ™ vЙ™ [1], [2]... kimi istinadlar ver.\n` +
-    `MЙ™nbЙ™lЙ™rdЙ™n sitat gЙ™tirЙ™rkЙ™n qД±sa vЙ™ dЙ™qiq ol.` + memoryBlock;
+  const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
+  const systemInstruction = `Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver.\n\n` +
+    `Cavab verərkən Google Axtarış alətindən (grounding) istifadə et, iddiaları ən son mənbələrlə dəstəklə və [1], [2]... kimi istinadlar ver.\n` +
+    `Mənbələrdən sitat gətirərkən qısa və dəqiq ol.` + memoryBlock;
 
   if (!ai) {
-    return { text: 'AI aГ§arД± yoxdur. ZЙ™hmЙ™t olmasa VITE_GEMINI_API_KEY tЙ™yin edin.', sources: [] as Source[] };
+    return { text: 'AI açarı yoxdur. Zəhmət olmasa VITE_GEMINI_API_KEY təyin edin.', sources: [] as Source[] };
   }
 
   const response = await ai.models.generateContent({

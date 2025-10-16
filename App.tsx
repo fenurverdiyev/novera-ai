@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { SearchBar } from './components/SearchBar';
+import { SearchBar } from './components/AttachmentSearchBar';
 import { MessageDisplay } from './components/MessageDisplay';
 import { streamChatQuery, generateRelatedQuestions, answerWithGroundedSearch } from './services/geminiService';
 import { searchImagesAndVideos, searchPlaces, searchNews, searchShopping, detectLocaleForSearch } from './services/searchService';
@@ -9,6 +9,7 @@ import { News } from './components/News';
 import { Weather } from './components/Weather';
 import { Translate } from './components/Translate';
 import { Settings } from './components/Settings';
+import SafeSearch from './components/SafeSearch';
 import { Logo } from './components/Logo';
 import { THEMES } from './animations/themes';
 import { useDeviceTools } from './hooks/useDeviceTools';
@@ -19,7 +20,8 @@ import { BrowserView } from './components/BrowserView';
 import LiveConversationView from './components/LiveConversationView';
 import { hasVisualIntent, hasPlaceIntent, hasNewsIntent, hasShoppingIntent, buildPlaceRecommendations, buildProductRecommendations, wantsProductRecommendations } from './utils/intents';
 import { refineVisualQuery } from './utils/refineVisualQuery';
-import { textToSpeech } from './services/elevenLabsService';
+import { geminiTts } from './services/geminiTtsService';
+import { ttsBinary } from './services/ttsBackendService';
 // Simple visual/places intent detectors
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -33,8 +35,21 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isAppReady, setIsAppReady] = useState(false);
   const [isLiveOverlayOpen, setIsLiveOverlayOpen] = useState(false);
+  const [safeSearchMode, setSafeSearchMode] = useState<'off' | 'blur' | 'filter'>(() => {
+    try {
+      const v = localStorage.getItem('nov-era-safe-search');
+      if (v === 'blur' || v === 'filter' || v === 'off') return v;
+    } catch {}
+    return 'off';
+  });
   
   const [liveVocalResponse, setLiveVocalResponse] = useState<{ id: string; text: string } | null>(null);const [activeView, setActiveView] = useState<AppView>('search');
+  const activeViewRef = useRef<AppView>('search');
+  const [pendingOpenUrl, setPendingOpenUrl] = useState<string | null>(null);
+  const [pendingOpenIncognito, setPendingOpenIncognito] = useState<boolean>(false);
+  const [pendingBrowserSearch, setPendingBrowserSearch] = useState<{ query: string; fromIncognito?: boolean } | null>(null);
+  const [previousView, setPreviousView] = useState<AppView>('search');
+  const [returnOnOverlayClose, setReturnOnOverlayClose] = useState(false);
   const [searchMode, setSearchMode] = useState<SearchMode>(() => {
     try {
       const saved = localStorage.getItem('nov-era-search-mode') as SearchMode | null;
@@ -47,12 +62,13 @@ const App: React.FC = () => {
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
         const migratedTheme = parsed.theme === 'rgbneon' ? 'plexus' : parsed.theme;
-        return { noveraColor: '#000000', ...parsed, theme: migratedTheme };
+        // Ensure voice defaults exist for live conversation
+        return { noveraColor: '#000000', voiceEnabled: parsed.voiceEnabled ?? true, voiceId: parsed.voiceId || 'EXAVITQu4vr4xnSDxMaL', ...parsed, theme: migratedTheme };
       }
     } catch (error) {
       console.error("Could not parse saved settings:", error);
     }
-    return { theme: 'novera', noveraColor: '#000000' };
+    return { theme: 'novera', noveraColor: '#000000', voiceEnabled: true, voiceId: 'EXAVITQu4vr4xnSDxMaL' } as any;
   });
   const [scrollOffset, setScrollOffset] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -68,10 +84,106 @@ const App: React.FC = () => {
   const isProcessingSentencesRef = useRef(false);
   const sentenceAudioCacheRef = useRef<Record<string, string | null>>({});
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  // Bridge status updates to Live view
+  const dispatchLiveStatus = useCallback((s: 'idle' | 'speaking' | 'processing' | 'listening') => {
+    try { window.dispatchEvent(new CustomEvent('nov-era-live-status' as any, { detail: s })); } catch {}
+  }, []);
+  // Global: run a Browser search (optionally from Incognito)
+  useEffect(() => {
+    const onBrowserSearch = (e: any) => {
+      try {
+        const detail = e?.detail;
+        const q = (detail?.query || '').toString();
+        const fromIncognito = !!detail?.fromIncognito;
+        if (!q) return;
+        setPreviousView(activeViewRef.current);
+        setReturnOnOverlayClose(false);
+        setActiveView('browser');
+        setPendingBrowserSearch({ query: q, fromIncognito });
+      } catch {}
+    };
+    window.addEventListener('nov-era-browser-search' as any, onBrowserSearch as any);
+    return () => window.removeEventListener('nov-era-browser-search' as any, onBrowserSearch as any);
+  }, []);
+
+  
   const addMessage = useCallback((message: Omit<Message, 'id'>) => {
     setMessages(prev => [...prev, { ...message, id: Date.now().toString() }]);
   }, []);
+
+  // Listen for voice changes coming from VoiceSelector overlay
+  useEffect(() => {
+    const onVoiceChange = (e: any) => {
+      const v = e?.detail;
+      if (v && typeof v === 'string') {
+        setSettings(prev => ({ ...prev, voiceId: v, voiceEnabled: true }));
+      }
+    };
+    window.addEventListener('nov-era-voice-change' as any, onVoiceChange as any);
+    return () => window.removeEventListener('nov-era-voice-change' as any, onVoiceChange as any);
+  }, []);
+
+  // Global: open any external link inside NovEra Browser overlay
+  useEffect(() => {
+    const handler = (e: any) => {
+      try {
+        const url = e?.detail;
+        if (!url || typeof url !== 'string') return;
+        setPreviousView(activeViewRef.current);
+        setReturnOnOverlayClose(true);
+        setActiveView('browser');
+        setPendingOpenUrl(url);
+      } catch {}
+    };
+    window.addEventListener('nov-era-open-url' as any, handler as any);
+    return () => window.removeEventListener('nov-era-open-url' as any, handler as any);
+  }, []);
+  // Global: open Incognito as separate view
+  useEffect(() => {
+    const onIncog = () => {
+      try {
+        setPreviousView(activeViewRef.current);
+        setReturnOnOverlayClose(false);
+        setActiveView('incognito');
+        setPendingOpenIncognito(false);
+      } catch {}
+    };
+    window.addEventListener('nov-era-open-incognito' as any, onIncog as any);
+    return () => window.removeEventListener('nov-era-open-incognito' as any, onIncog as any);
+  }, []);
+  // Navigation events (e.g., from SearchBar hamburger)
+  useEffect(() => {
+    const onNav = (e: any) => {
+      const view = (e?.detail || '').toString();
+      if (!view) return;
+      if (view === 'profile' || view === 'settings' || view === 'safe-search' || view === 'news' || view === 'weather' || view === 'translate') {
+        if (view === 'safe-search') setPreviousView(activeViewRef.current);
+        setActiveView(view as any);
+      }
+    };
+    window.addEventListener('nov-era-nav' as any, onNav as any);
+    return () => window.removeEventListener('nov-era-nav' as any, onNav as any);
+  }, []);
+  // Back navigation requests
+  useEffect(() => {
+    const onBack = () => {
+      setActiveView(previousView);
+    };
+    window.addEventListener('nov-era-back' as any, onBack as any);
+    return () => window.removeEventListener('nov-era-back' as any, onBack as any);
+  }, [previousView]);
+  // SafeSearch changes
+  useEffect(() => {
+    const onSafe = (e: any) => {
+      const v = (e?.detail || '').toString();
+      if (v === 'off' || v === 'blur' || v === 'filter') setSafeSearchMode(v);
+    };
+    window.addEventListener('nov-era-safe-search-changed' as any, onSafe as any);
+    return () => window.removeEventListener('nov-era-safe-search-changed' as any, onSafe as any);
+  }, []);
   const { executeToolCalls } = useDeviceTools(addMessage);
+  // Keep ref in sync with current activeView
+  useEffect(() => { activeViewRef.current = activeView; }, [activeView]);
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsAppReady(true);
@@ -99,6 +211,31 @@ const App: React.FC = () => {
     return () => window.removeEventListener('nov-era-clear-all' as any, handleClearAll as any);
   }, []);
 
+  // Clear recent N minutes from history
+  useEffect(() => {
+    const handleClearRecent = (e: any) => {
+      try {
+        const minutes = Number(e?.detail) || 30;
+        const cutoff = Date.now() - minutes * 60 * 1000;
+        setMessages(prev => {
+          const filtered = prev.filter(m => {
+            const t = parseInt(m.id, 10);
+            return isNaN(t) || t < cutoff; // keep older than cutoff
+          });
+          try { localStorage.setItem('nov-era-chat-history', JSON.stringify(filtered)); } catch {}
+          return filtered;
+        });
+      } catch {}
+    };
+    window.addEventListener('nov-era-clear-recent' as any, handleClearRecent as any);
+    return () => window.removeEventListener('nov-era-clear-recent' as any, handleClearRecent as any);
+  }, []);
+
+  // Persist SafeSearch mode
+  useEffect(() => {
+    try { localStorage.setItem('nov-era-safe-search', safeSearchMode); } catch {}
+  }, [safeSearchMode]);
+
   useEffect(() => {
     try {
       localStorage.setItem('gemini-insight-settings', JSON.stringify(settings));
@@ -124,6 +261,35 @@ const App: React.FC = () => {
       }, 250); // debounce to avoid thrashing
     } catch {}
   }, [messages]);
+
+
+  // Lightweight client-side image compression for data URLs
+  const compressDataUrl = async (dataUrl: string, maxSize = 1280, quality = 0.82): Promise<string> => {
+    try {
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('img load error'));
+        img.src = dataUrl;
+      });
+      const canvas = document.createElement('canvas');
+      let { width, height } = img as HTMLImageElement;
+      if (width > height) {
+        if (width > maxSize) { height = Math.round((height * maxSize) / width); width = maxSize; }
+      } else {
+        if (height > maxSize) { width = Math.round((width * maxSize) / height); height = maxSize; }
+      }
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return dataUrl;
+      ctx.drawImage(img as HTMLImageElement, 0, 0, width, height);
+      const out = canvas.toDataURL('image/jpeg', quality);
+      return out || dataUrl;
+    } catch {
+      return dataUrl;
+    }
+  };
+  const compressAll = async (list: string[], size = 1280, q = 0.82) => Promise.all(list.map(d => compressDataUrl(d, size, q)));
 
 
   const clearHistory = useCallback(() => {
@@ -154,26 +320,36 @@ const App: React.FC = () => {
 
 
   const handleSend = async (query: string, images?: string[], isVocalQuery: boolean = false) => {
-    // Always close overlay; background TTS will continue
-    setActiveView('search');
+    // Keep Live view when vocal query; otherwise go to search view
+    if (isVocalQuery) {
+      setActiveView('live');
+    } else {
+      setActiveView('search');
+    }
     setIsLiveOverlayOpen(false);
     setIsLoading(true);
-    const userMessage: Message = { id: Date.now().toString(), role: 'user', text: query };
+    const hasImages = !!(images && images.length);
+    const preparedImages = hasImages ? await compressAll(images!, 1280, 0.82) : [];
+    const userMessage: Message = { id: Date.now().toString(), role: 'user', text: query, images: hasImages ? preparedImages : undefined };
     const modelMessageId = (Date.now() + 1).toString();
     const initialModelMessage: Message = {
       id: modelMessageId, role: 'model', text: '', sources: [], related: [],
       isLoading: true, images: [], videos: [], progressStep: 1,
     };
     
-    const history = messages.slice(-10); // Son 5 sual-cavab cГјtГј
+    const history = messages.slice(-10); // Son 5 sual-cavab cütü
     setMessages(prev => [...prev, userMessage, initialModelMessage]);
+    if (isVocalQuery && (settings.voiceEnabled ?? true)) {
+      try { dispatchLiveStatus('processing'); } catch {}
+    }
 
 
     try {
       // Grounded mode: Universe or prefix '?' forces web-grounded answer
       const explicitGrounded = query.trim().startsWith('?');
       const groundedQuery = explicitGrounded ? query.trim().slice(1).trim() : query;
-      const isGrounded = (searchMode === 'universe') || explicitGrounded;
+      // If images are attached, prefer pure analysis (no grounded web search)
+      const isGrounded = !hasImages && ((searchMode === 'universe') || explicitGrounded);
 
 
       if (isGrounded) {
@@ -254,20 +430,20 @@ const App: React.FC = () => {
       const sentenceEndRegex = /[.!?…]/;
 
 
-      if (isVocalQuery && settings.voiceEnabled) {
+      if (isVocalQuery && (settings.voiceEnabled ?? true)) {
         currentPlayingMessageIdRef.current = modelMessageId;
         setPlayingMessageId(modelMessageId);
       }
 
 
-      const stream = streamChatQuery(groundedQuery, history, images);
+      const stream = streamChatQuery(groundedQuery, history, hasImages ? preparedImages : images, undefined, undefined, hasImages ? true : undefined);
 
 
       // If we expect visuals/places/news/shopping, mark step 2 and prefetch in background
-      const willFetchVisuals = hasVisualIntent(groundedQuery) || hasShoppingIntent(groundedQuery) || hasNewsIntent(groundedQuery) || hasPlaceIntent(groundedQuery);
-      const willFetchPlaces = hasPlaceIntent(groundedQuery);
-      const willFetchNews = hasNewsIntent(groundedQuery);
-      const willFetchShopping = hasShoppingIntent(groundedQuery);
+      const willFetchVisuals = hasImages ? false : (hasVisualIntent(groundedQuery) || hasShoppingIntent(groundedQuery) || hasNewsIntent(groundedQuery) || hasPlaceIntent(groundedQuery));
+      const willFetchPlaces = hasImages ? false : hasPlaceIntent(groundedQuery);
+      const willFetchNews = hasImages ? false : hasNewsIntent(groundedQuery);
+      const willFetchShopping = hasImages ? false : hasShoppingIntent(groundedQuery);
 
 
       if (willFetchVisuals || willFetchPlaces || willFetchNews || willFetchShopping) {
@@ -299,7 +475,7 @@ const App: React.FC = () => {
           }
 
 
-          if (isVocalQuery && settings.voiceEnabled) {
+          if (isVocalQuery && (settings.voiceEnabled ?? true)) {
             let match;
             while ((match = sentenceAccumulator.match(sentenceEndRegex))) {
               const sentence = sentenceAccumulator.substring(0, match.index! + 1).trim();
@@ -342,10 +518,22 @@ const App: React.FC = () => {
         }
 
 
-        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
-          ...msg, text: fullResponseText,
-          sources: [...(msg.sources || []), ...(chunk.sources || [])],
-        } : msg));
+        setMessages(prev => prev.map(msg => {
+          if (msg.id !== modelMessageId) return msg;
+          const mergedImages = chunk.images && chunk.images.length
+            ? Array.from(new Set([...(msg.images || []), ...chunk.images]))
+            : msg.images;
+          const mergedVideos = chunk.videos && chunk.videos.length
+            ? Array.from(new Set([...(msg.videos || []), ...chunk.videos]))
+            : msg.videos;
+          return {
+            ...msg,
+            text: fullResponseText,
+            sources: [...(msg.sources || []), ...(chunk.sources || [])],
+            images: mergedImages,
+            videos: mergedVideos,
+          };
+        }));
 
 
         if (isVocalQuery) setLiveVocalResponse({ id: modelMessageId, text: fullResponseText });
@@ -353,7 +541,7 @@ const App: React.FC = () => {
 
 
       // Handle any remaining text in the accumulator
-      if (isVocalQuery && settings.voiceEnabled && sentenceAccumulator.trim()) {
+      if (isVocalQuery && (settings.voiceEnabled ?? true) && sentenceAccumulator.trim()) {
         const leftover = sentenceAccumulator.trim();
         sentenceQueueRef.current.push(leftover);
         if (!isProcessingSentencesRef.current) {
@@ -440,11 +628,54 @@ const App: React.FC = () => {
     setScrollOffset(event.currentTarget.scrollTop);
   };
 
+  // Global: run AI analyze for a given query (from Incognito view)
+  useEffect(() => {
+    const onAiAnalyze = (e: any) => {
+      try {
+        const q = (e?.detail || '').toString();
+        if (!q) return;
+        // Force grounded analysis via leading '?'
+        handleSend(`? ${q}`);
+      } catch {}
+    };
+    window.addEventListener('nov-era-ai-analyze' as any, onAiAnalyze as any);
+    return () => window.removeEventListener('nov-era-ai-analyze' as any, onAiAnalyze as any);
+  }, [handleSend]);
+
 
   const renderView = () => {
     switch (activeView) {
-        case 'browser': return <BrowserView onVisualQuery={(q, imgs) => handleSend(q, imgs)} />;
-        case 'google-search': return <BrowserView onVisualQuery={(q, imgs) => handleSend(q, imgs)} />;
+        case 'browser': return (
+          <BrowserView
+            onVisualQuery={(q, imgs) => handleSend(q, imgs)}
+            openOverlayUrl={pendingOpenUrl || undefined}
+            onOpenedOverlay={() => setPendingOpenUrl(null)}
+            onOverlayClosed={() => { if (returnOnOverlayClose) { setReturnOnOverlayClose(false); setActiveView(previousView); } }}
+            safeSearchMode={safeSearchMode}
+            openIncognito={pendingOpenIncognito}
+            onOpenedIncognito={() => setPendingOpenIncognito(false)}
+            incomingSearch={pendingBrowserSearch || undefined}
+            onConsumedIncomingSearch={() => setPendingBrowserSearch(null)}
+          />
+        );
+        case 'google-search': return (
+          <BrowserView
+            onVisualQuery={(q, imgs) => handleSend(q, imgs)}
+            openOverlayUrl={pendingOpenUrl || undefined}
+            onOpenedOverlay={() => setPendingOpenUrl(null)}
+            onOverlayClosed={() => { if (returnOnOverlayClose) { setReturnOnOverlayClose(false); setActiveView(previousView); } }}
+            safeSearchMode={safeSearchMode}
+            openIncognito={pendingOpenIncognito}
+            onOpenedIncognito={() => setPendingOpenIncognito(false)}
+          />
+        );
+        case 'incognito':
+          return (
+            <div className="flex-1 h-full">
+              <GoogleSearchView isIncognito={true} />
+            </div>
+          );
+        case 'safe-search': return <SafeSearch value={safeSearchMode} onChange={(v) => setSafeSearchMode(v)} />;
         case 'news': return <News themeColor={activeThemeColor} />;
         case 'weather': return <Weather />;
         case 'translate': return <Translate />;
@@ -453,7 +684,7 @@ const App: React.FC = () => {
                 case 'live':
             return (
                 <div className="flex flex-col h-full bg-bg-jet/80 backdrop-blur-sm">
-                    <main className="flex-grow overflow-y-auto"> 
+                    <main className="flex-grow overflow-y-auto app-scroll"> 
                         <LiveConversationView onQuery={(q, imgs) => handleSend(q, imgs, true)} onBack={() => setActiveView('search')} />
                     </main>
                 </div>
@@ -462,7 +693,7 @@ const App: React.FC = () => {
         default:
             return (
                 <div className="flex flex-col h-full bg-bg-jet/80 backdrop-blur-sm">
-                    <main className="flex-grow overflow-y-auto" onScroll={handleScroll}>
+                    <main className="flex-grow overflow-y-auto app-scroll" onScroll={handleScroll}>
                         {messages.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-full text-center px-4">
                                 <Logo isLarge={true} className="mb-4" />
@@ -479,7 +710,7 @@ const App: React.FC = () => {
                     </main>
                     <footer className="bg-transparent pt-2">
                         <SearchBar 
-                            onSend={(q) => handleSend(q)} 
+                            onSend={(q, imgs) => handleSend(q, imgs)} 
                             isLoading={isLoading} 
                             onVoiceClick={() => setActiveView('live')}
                                 searchMode={searchMode}
@@ -501,36 +732,35 @@ const App: React.FC = () => {
 
   useEffect(() => {
     // Initialize Web Audio analyser for visualizations and playback routing
-    if (audioRef.current && !audioSourceRef.current) {
-        try {
-            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-            const analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 256;
-            
-            const source = audioCtx.createMediaElementSource(audioRef.current);
-            source.connect(analyser);
-            analyser.connect(audioCtx.destination);
-            
-            audioContextRef.current = audioCtx;
-            analyserRef.current = analyser;
-            audioSourceRef.current = source;
-        } catch (e) {
-            console.error("Could not create AudioContext:", e);
-        }
+    if (!audioRef.current) return;
+    try {
+      const el: any = audioRef.current;
+      const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = audioContextRef.current || el.__novEraAudioCtx || new AC();
+      const existingSource = audioSourceRef.current || el.__novEraSource || null;
+      const source = existingSource || audioCtx.createMediaElementSource(audioRef.current);
+      // cache on element to avoid creating multiple MediaElementSourceNodes for same element
+      el.__novEraAudioCtx = audioCtx;
+      el.__novEraSource = source;
+
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+
+      audioContextRef.current = audioCtx;
+      analyserRef.current = analyser;
+      audioSourceRef.current = source;
+    } catch (e) {
+      console.error("Could not create AudioContext:", e);
     }
+
     return () => {
-        if (audioSourceRef.current) {
-            audioSourceRef.current.disconnect();
-            audioSourceRef.current = null;
-        }
-        if (analyserRef.current) {
-            analyserRef.current.disconnect();
-            analyserRef.current = null;
-        }
-        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-            audioContextRef.current.close().catch(console.error);
-            audioContextRef.current = null;
-        }
+      // Only disconnect analyser; keep source/context cached to prevent duplicate MediaElementSourceNode errors across remounts
+      if (analyserRef.current) {
+        try { analyserRef.current.disconnect(); } catch {}
+        analyserRef.current = null;
+      }
     };
   }, []);
 
@@ -574,7 +804,11 @@ const App: React.FC = () => {
 
 
   const processVocalStream = useCallback(async () => {
-    if (isProcessingSentencesRef.current || sentenceQueueRef.current.length === 0 || !currentPlayingMessageIdRef.current) {
+    if (isProcessingSentencesRef.current || !currentPlayingMessageIdRef.current) {
+        return;
+    }
+    if (sentenceQueueRef.current.length === 0) {
+        dispatchLiveStatus('idle');
         return;
     }
 
@@ -593,57 +827,117 @@ const App: React.FC = () => {
         const nextSentences = sentenceQueueRef.current.slice(1, 3);
         nextSentences.forEach(nextSentence => {
             if (nextSentence && sentenceAudioCacheRef.current[nextSentence] === undefined) {
-                sentenceAudioCacheRef.current[nextSentence] = null; 
-                textToSpeech(nextSentence, settings.voiceId).then(url => {
+                sentenceAudioCacheRef.current[nextSentence] = null;
+                geminiTts(nextSentence)
+                  .then(url => {
                     sentenceAudioCacheRef.current[nextSentence] = url;
-                });
+                  })
+                  .catch(async () => {
+                    try {
+                      const b = await ttsBinary(nextSentence, { voiceId: settings.voiceId });
+                      sentenceAudioCacheRef.current[nextSentence] = b;
+                    } catch {
+                      sentenceAudioCacheRef.current[nextSentence] = null;
+                    }
+                  });
             }
         });
 
 
         let url = sentenceAudioCacheRef.current[sentence];
         if (url === undefined || url === null) {
-            url = await textToSpeech(sentence, settings.voiceId);
-            sentenceAudioCacheRef.current[sentence] = url;
+            try {
+              url = await geminiTts(sentence);
+            } catch {
+              try { url = await ttsBinary(sentence, { voiceId: settings.voiceId }); } catch {}
+            }
+            sentenceAudioCacheRef.current[sentence] = url || null;
         }
 
 
         if (url && currentPlayingMessageIdRef.current) {
+            // Play with TTS audio
             sentenceQueueRef.current.shift();
             audioRef.current.src = url;
             if (audioContextRef.current?.state === 'suspended') {
                 await audioContextRef.current.resume();
             }
+            try { dispatchLiveStatus('speaking'); } catch {}
             await audioRef.current.play();
         } else {
-            isProcessingSentencesRef.current = false;
-            setTimeout(processVocalStream, 100);
+            // Fallback: use Web Speech Synthesis so the queue does not stall
+            try {
+                const utter = new SpeechSynthesisUtterance(sentence);
+                // Pick best available voice/lang (az → tr → en)
+                try {
+                  const list = window.speechSynthesis.getVoices?.() || [];
+                  const pick = list.find(v => (v.lang || '').toLowerCase().startsWith('az'))
+                    || list.find(v => (v.lang || '').toLowerCase().startsWith('tr'))
+                    || list.find(v => (v.lang || '').toLowerCase().startsWith('en'))
+                    || null;
+                  if (pick) { utter.voice = pick; utter.lang = pick.lang; } else { utter.lang = (navigator.language || 'tr-TR'); }
+                } catch { utter.lang = 'tr-TR'; }
+                utter.onend = () => {
+                    try { window.speechSynthesis.cancel(); } catch {}
+                    sentenceQueueRef.current.shift();
+                    isProcessingSentencesRef.current = false;
+                    try { dispatchLiveStatus(sentenceQueueRef.current.length ? 'speaking' : 'idle'); } catch {}
+                    processVocalStream();
+                };
+                utter.onerror = () => {
+                    // Drop this sentence and continue
+                    try { window.speechSynthesis.cancel(); } catch {}
+                    sentenceQueueRef.current.shift();
+                    isProcessingSentencesRef.current = false;
+                    setTimeout(processVocalStream, 0);
+                };
+                try { dispatchLiveStatus('speaking'); } catch {}
+                window.speechSynthesis.speak(utter);
+                return; // exit; onend will continue the pipeline
+            } catch {
+                // If even synthesis fails, drop this sentence and continue
+                sentenceQueueRef.current.shift();
+                isProcessingSentencesRef.current = false;
+                setTimeout(processVocalStream, 0);
+                return;
+            }
         }
     } catch (error) {
-        console.error("SЙ™s oxunarkЙ™n xЙ™ta baЕџ verdi:", sentence, error);
+        console.error("S 9s oxunark 99n x 9ta ba 5f verdi:", sentence, error);
         if (currentPlayingMessageIdRef.current) {
-          setMessages(prev => prev.map(m => m.id === currentPlayingMessageIdRef.current ? { ...m, ttsError: 'Səsləndirmə mümkün olmadı.' } : m));
+          setMessages(prev => prev.map(m => m.id === currentPlayingMessageIdRef.current ? { ...m, ttsError: 'S 9sl 9ndirm 9 m fcmk fcn olmad 31.' } : m));
         }
         sentenceQueueRef.current.shift();
         isProcessingSentencesRef.current = false;
         processVocalStream();
     }
-}, [settings.voiceId]);
+  }, [settings.voiceId]);
 
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-
     const handleAudioEnd = () => {
+        isProcessingSentencesRef.current = false;
+        processVocalStream();
+        if (sentenceQueueRef.current.length === 0) {
+          try { dispatchLiveStatus('idle'); } catch {}
+        }
+    };
+    const handleAudioError = () => {
+        // Skip current sentence and continue
         isProcessingSentencesRef.current = false;
         processVocalStream();
     };
 
 
     audio.addEventListener('ended', handleAudioEnd);
-    return () => audio.removeEventListener('ended', handleAudioEnd);
+    audio.addEventListener('error', handleAudioError);
+    return () => {
+      audio.removeEventListener('ended', handleAudioEnd);
+      audio.removeEventListener('error', handleAudioError);
+    };
   }, [processVocalStream]);
   const chunkText = (text: string): string[] => (text.match(/[^.!?…]+[.!?…]*|[^.!?]+$/g)?.map(s => s.trim()).filter(Boolean) || []);
 
@@ -680,6 +974,7 @@ const App: React.FC = () => {
 
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
 
   return (
@@ -691,8 +986,18 @@ const App: React.FC = () => {
         />
       )}
       {/* Desktop sidebar */}
-      <div className="hidden md:block">
-        <Sidebar activeView={activeView} setActiveView={setActiveView} onNewChat={clearHistory} themeColor={activeThemeColor} onOpenSession={loadSession} />
+      <div className="hidden md:flex relative">
+        <div className={`h-full transition-all duration-300 overflow-hidden ${isSidebarCollapsed ? 'w-0' : 'w-60'}`}>
+          <Sidebar activeView={activeView} setActiveView={setActiveView} onNewChat={clearHistory} themeColor={activeThemeColor} onOpenSession={loadSession} />
+        </div>
+        <button
+          onClick={() => setIsSidebarCollapsed(v => !v)}
+          className="absolute -right-3 top-1/2 -translate-y-1/2 z-30 w-6 h-16 rounded-r-lg bg-white/10 hover:bg-white/15 border border-white/20 text-white/80 backdrop-blur flex items-center justify-center"
+          aria-label="Yan paneli gizlət/göstər"
+          title="Yan paneli gizlət/göstər"
+        >
+          {isSidebarCollapsed ? '<' : '>'}
+        </button>
       </div>
 
 
@@ -723,9 +1028,9 @@ const App: React.FC = () => {
           <button onClick={clearHistory} className="px-3 py-1.5 rounded-lg bg-accent/20 text-white hover:bg-accent/30 text-xs">Yeni söhbət</button>
         </div>
 
-
         {renderView()}
       </div>
+
       <input 
         type="file" 
         ref={fileInputRef} 
@@ -733,15 +1038,32 @@ const App: React.FC = () => {
         className="hidden" 
         accept="image/*"
       />
+      {/* Hidden audio element for TTS playback */}
+      <audio ref={audioRef} className="hidden" preload="auto" />
+
+      {/* Transparent/thin scrollbars for app scroll containers */}
+      <style>
+        {`
+          /* Global (body) scrollbar becomes subtle/transparent */
+          html, body { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.14) transparent; }
+          body::-webkit-scrollbar-track { background: transparent; }
+          body::-webkit-scrollbar-thumb { background-color: rgba(255,255,255,.16); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+          body::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,.28); }
+
+          .app-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
+          .app-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+          .app-scroll::-webkit-scrollbar-track { background: transparent; }
+          .app-scroll::-webkit-scrollbar-thumb { background-color: rgba(255,255,255,.18); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+          .app-scroll::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,.28); }
+          .app-scroll { -webkit-overflow-scrolling: touch; }
+        `}
+      </style>
     </div>
   );
 };
 
 
 export default App;
-
-
-
 
 
 

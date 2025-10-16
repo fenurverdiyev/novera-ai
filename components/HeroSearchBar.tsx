@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 import { MicrophoneIcon, CameraIcon, SearchIcon, LoadingSpinner, PlusIcon, CloseIcon } from './Icons';
-import { CameraCapture } from './CameraCapture';
 import { suggestAutocomplete, detectLocaleForSearch } from '../services/searchService';
 
 interface HeroSearchBarProps {
@@ -9,9 +8,12 @@ interface HeroSearchBarProps {
   isLoading: boolean;
   onVoiceClick: () => void;
   placeholder?: string;
+  onImageSelected?: (images: string[]) => void;
+  enableEmptySubmit?: boolean;
+  disableHistory?: boolean;
 }
 
-export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading, onVoiceClick, placeholder }) => {
+export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading, onVoiceClick, placeholder, onImageSelected, enableEmptySubmit, disableHistory }) => {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [activeIndex, setActiveIndex] = useState<number>(-1);
@@ -24,25 +26,25 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
   const sttBaseTextRef = useRef<string>('');
   const [isListening, setIsListening] = useState(false);
   const [showUploadMenu, setShowUploadMenu] = useState(false);
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [hasCaptured, setHasCaptured] = useState(false);
-  const [localError, setLocalError] = useState<string | null>(null);
 
   // Load history on mount
   useEffect(() => {
+    if (disableHistory) { setHistory([]); return; }
     try {
       const raw = localStorage.getItem('novEra.search.history');
       const arr = raw ? JSON.parse(raw) : [];
       if (Array.isArray(arr)) setHistory(arr as string[]);
     } catch {}
-  }, []);
+  }, [disableHistory]);
+
+  
 
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     const q = query.trim();
     if (q.length < 2) {
-      // show history when focused and query short
-      if (isFocused) {
+      // show history when focused and query short (only if allowed)
+      if (isFocused && !disableHistory) {
         setSuggestions(history);
         setActiveIndex(history.length ? 0 : -1);
       } else {
@@ -64,21 +66,23 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
     }, 220);
 
     return () => { if (debounceRef.current) window.clearTimeout(debounceRef.current); };
-  }, [query, isFocused, history]);
+  }, [query, isFocused, history, disableHistory]);
 
   const handleSend = () => {
     const q = query.trim();
-    if (!q) return;
+    if (!q && !enableEmptySubmit) return;
     onSend(q);
-    // push to history (dedupe, cap 20)
-    setHistory(prev => {
-      const cleaned = q.slice(0, 200);
-      let next = prev.filter(p => p.toLowerCase() !== cleaned.toLowerCase());
-      next.unshift(cleaned);
-      if (next.length > 20) next = next.slice(0, 20);
-      try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch {}
-      return next;
-    });
+    // push to history (dedupe, cap 20) — disabled for incognito
+    if (q && !disableHistory) {
+      setHistory(prev => {
+        const cleaned = q.slice(0, 200);
+        let next = prev.filter(p => p.toLowerCase() !== cleaned.toLowerCase());
+        next.unshift(cleaned);
+        if (next.length > 20) next = next.slice(0, 20);
+        try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch {}
+        return next;
+      });
+    }
     setQuery('');
     setSuggestions([]);
   };
@@ -114,9 +118,8 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
       const reader = new FileReader();
       reader.onload = (e) => {
         const base64Image = e.target?.result as string;
-        const analysisQuery = query.trim() || 'Bu şəkli analiz et.';
-        onSend(analysisQuery, [base64Image]);
-        setQuery('');
+        // Do not auto-send; notify parent that an image is ready for search
+        onImageSelected?.([base64Image]);
         setSuggestions([]);
         setShowUploadMenu(false);
       };
@@ -150,8 +153,21 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
   const stopListening = () => { try { recognitionRef.current?.stop(); } catch {} setIsListening(false); };
   const toggleListening = () => { if (isListening) stopListening(); else startListening(); };
 
+  
+
   const ph = placeholder || 'Axtarış edin və ya yazmağa başlayın...';
-  const canSearch = query.trim().length > 0;
+  const canSearch = query.trim().length > 0 || !!enableEmptySubmit;
+  const isHistoryMode = !disableHistory && isFocused && query.trim().length < 2;
+
+  const removeFromHistory = (item: string) => {
+    setHistory(prev => {
+      const next = prev.filter(p => p.toLowerCase() !== item.toLowerCase());
+      try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch {}
+      return next;
+    });
+    setSuggestions(prev => prev.filter(p => p.toLowerCase() !== item.toLowerCase()));
+    setActiveIndex(-1);
+  };
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4">
@@ -181,12 +197,12 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
           onFocus={() => { setIsFocused(true); if (query.trim().length < 2) { setSuggestions(history); setActiveIndex(history.length ? 0 : -1); } }}
           onBlur={() => { setTimeout(() => { setIsFocused(false); setSuggestions([]); setActiveIndex(-1); }, 150); }}
           placeholder={ph}
-          className={`w-full rounded-full h-14 md:h-16 pl-12 pr-28 bg-black/30 text-white text-lg md:text-xl placeholder-white/70 focus:outline-none border border-white/20 ring-1 ring-white/10 backdrop-blur`}
+          className={`w-full rounded-full h-12 md:h-16 pl-10 md:pl-12 pr-32 md:pr-28 bg-black/30 text-base md:text-xl placeholder-white/70 focus:outline-none border border-white/20 ring-1 ring-white/10 backdrop-blur`}
           disabled={isLoading}
         />
 
         {/* Right action icons */}
-        <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-2">
+        <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5 md:gap-2">
           {query.trim().length > 0 && (
             <button
               onClick={() => { setQuery(''); setSuggestions([]); }}
@@ -215,15 +231,16 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
             aria-label="Səsi mətinə çevir"
             title="Səsi mətinə çevir"
           >
-            {isLoading ? <LoadingSpinner className="w-5 h-5" /> : <MicrophoneIcon className="w-5 h-5" />}
+            {isLoading ? <LoadingSpinner className="w-4 h-4 md:w-5 md:h-5" /> : <MicrophoneIcon className="w-4 h-4 md:w-5 md:h-5" />}
           </button>
+
           <button
-            onClick={() => { setIsCameraOpen(true); setHasCaptured(false); setLocalError(null); }}
+            onClick={() => { fileInputRef.current?.click(); }}
             className="p-2 rounded-full text-white/90 bg-white/10 hover:bg-white/15 border border-white/20"
             aria-label="Kamera ilə çək"
             title="Kamera ilə çək"
           >
-            <CameraIcon className="w-5 h-5" />
+            <CameraIcon className="w-4 h-4 md:w-5 md:h-5" />
           </button>
           <div className="relative">
             <button
@@ -231,13 +248,14 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
               className="p-2 rounded-full text-white/90 bg-white/10 hover:bg-white/15 border border-white/20"
               aria-label="Şəkil əlavə et"
               title="Şəkil əlavə et"
+              type="button"
             >
-              <PlusIcon className="w-5 h-5" />
+              <PlusIcon className="w-4 h-4 md:w-5 md:h-5" />
             </button>
             {showUploadMenu && (
               <div className="absolute right-0 top-[calc(100%+0.5rem)] bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl border border-white/20 py-2 min-w-[180px] z-20 overflow-hidden">
                 <div className="absolute right-4 -top-1 w-3 h-3 rotate-45 bg-white/10 border-t border-l border-white/20" />
-                <button onClick={() => { setIsCameraOpen(true); setHasCaptured(false); setLocalError(null); setShowUploadMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 transition-colors flex items-center gap-2">
+                <button onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 transition-colors flex items-center gap-2">
                   <span>📷</span>
                   <span>Kamera</span>
                 </button>
@@ -252,79 +270,81 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
               </div>
             )}
           </div>
+          {/* Hamburger menyu yoxdur — global sol yuxarıda yerləşdirilib */}
         </div>
 
-        {/* Suggestions */}
-        {suggestions.length > 0 && (
-          <div className="absolute top-[calc(100%+0.5rem)] left-0 w-full bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 shadow-2xl z-20 overflow-auto max-h-64 thin-scroll">
-            {isFocused && query.trim().length < 2 && (
-              <div className="px-4 py-2 text-xs text-white/60 border-b border-white/10">Keçmiş axtarışlar</div>
+        {/* Suggestions / History popover */}
+        {(isHistoryMode || suggestions.length > 0) && (
+          <div className="absolute top-[calc(100%+0.5rem)] left-0 right-0 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 shadow-2xl ring-1 ring-black/10 z-50 overflow-auto max-h-[60vh] thin-scroll overscroll-contain pointer-events-auto">
+            {isHistoryMode && (
+              <div className="flex items-center justify-between px-4 py-2 text-xs text-white/70 border-b border-white/10">
+                <span>Keçmiş axtarışlar</span>
+                {history.length > 0 && (
+                  <button
+                    onMouseDown={(e) => { e.preventDefault(); }}
+                    onTouchStart={(e) => { e.preventDefault(); }}
+                    onClick={() => { setHistory([]); setSuggestions([]); try { localStorage.setItem('novEra.search.history', JSON.stringify([])); } catch {} }}
+                    className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-white/80 border border-white/15"
+                  >
+                    Hamısını sil
+                  </button>
+                )}
+              </div>
             )}
             {suggestions.map((sug, idx) => (
-              <button
+              <div
                 key={sug}
-                onMouseDown={(e) => { e.preventDefault(); }}
                 onMouseEnter={() => setActiveIndex(idx)}
-                onClick={() => {
-                  setQuery(sug);
-                  onSend(sug);
-                  setHistory(prev => {
-                    const cleaned = sug.slice(0, 200);
-                    let next = prev.filter(p => p.toLowerCase() !== cleaned.toLowerCase());
-                    next.unshift(cleaned);
-                    if (next.length > 20) next = next.slice(0, 20);
-                    try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch {}
-                    return next;
-                  });
-                  setSuggestions([]); setActiveIndex(-1);
-                }}
-                className={`w-full text-left px-4 py-3 text-sm transition-colors truncate ${idx === activeIndex ? 'bg-accent/20 text-white' : 'text-white/90 hover:bg-white/15'}`}
-                title={sug}
+                className={`w-full flex items-center gap-2 px-2 ${idx === activeIndex ? 'bg-accent/20' : 'hover:bg-white/15'} transition-colors`}
               >
-                {sug}
-              </button>
+                <button
+                  onMouseDown={(e) => { e.preventDefault(); }}
+                  onTouchStart={(e) => { e.preventDefault(); }}
+                  onClick={() => {
+                    setQuery(sug);
+                    onSend(sug);
+                    setHistory(prev => {
+                      const cleaned = sug.slice(0, 200);
+                      let next = prev.filter(p => p.toLowerCase() !== cleaned.toLowerCase());
+                      next.unshift(cleaned);
+                      if (next.length > 20) next = next.slice(0, 20);
+                      try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch {}
+                      return next;
+                    });
+                    setSuggestions([]); setActiveIndex(-1);
+                  }}
+                  className={`flex-1 text-left px-2 py-3 text-sm truncate ${idx === activeIndex ? 'text-white' : 'text-white/90'}`}
+                  title={sug}
+                >
+                  {sug}
+                </button>
+                {isHistoryMode && (
+                  <button
+                    onMouseDown={(e) => { e.preventDefault(); }}
+                    onTouchStart={(e) => { e.preventDefault(); }}
+                    onClick={(e) => { e.stopPropagation(); removeFromHistory(sug); }}
+                    className="ml-auto my-1 px-2 py-1 rounded-md text-xs text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/15"
+                    title="Sətiri sil"
+                    aria-label="Sətiri sil"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
             ))}
+            {isHistoryMode && suggestions.length === 0 && (
+              <div className="px-4 py-4 text-sm text-white/60">
+                Hələ keçmiş yoxdur. Axtarış edəndə burada görünəcək.
+              </div>
+            )}
           </div>
         )}
 
-        {/* Hidden inputs for uploads */}
-        <input ref={fileInputRef} type="file" onChange={handleFileUpload} className="hidden" accept="image/*" />
+        {/* Hidden inputs for uploads. fileInputRef uses capture to hint native camera on mobile */}
+        <input ref={fileInputRef} type="file" onChange={handleFileUpload} className="hidden" accept="image/*" capture="environment" />
         <input ref={galleryInputRef} type="file" onChange={handleFileUpload} className="hidden" accept="image/*" capture={false} />
       </div>
 
-      {/* Camera overlay */}
-      {isCameraOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setIsCameraOpen(false)} />
-          <div className="relative z-50 w-[92vw] max-w-[680px] h-[60vh] bg-bg-slate/95 backdrop-blur-md border border-white/15 rounded-2xl shadow-2xl p-3 flex flex-col">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-white/80 text-sm">Kamera</div>
-              <button onClick={() => setIsCameraOpen(false)} className="p-2 rounded-lg hover:bg-white/10 text-white/80">
-                <CloseIcon className="w-5 h-5" />
-              </button>
-            </div>
-            {localError && (
-              <div className="mb-2 text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded p-2">{localError}</div>
-            )}
-            <div className="flex-1 relative rounded-lg overflow-hidden">
-              <CameraCapture
-                isActive={true}
-                captureInterval={1200}
-                onError={(msg) => setLocalError(msg)}
-                onImageCaptured={(img) => {
-                  if (hasCaptured) return;
-                  setHasCaptured(true);
-                  setIsCameraOpen(false);
-                  const analysisQuery = (query.trim() || 'Bu şəkli analiz et.');
-                  onSend(analysisQuery, [img.dataUrl]);
-                  setQuery('');
-                }}
-              />
-            </div>
-            <div className="pt-3 text-center text-xs text-white/70">Şəkil avtomatik çəkilib axtarışa göndəriləcək</div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

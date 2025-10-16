@@ -5,6 +5,9 @@ import { SourcePill } from './SourcePill';
 import { RelatedQuery } from './RelatedQuery';
 import { ProtectedImage } from './ProtectedImage';
 
+// Remember which message IDs have already been animated (typing/fade) so it doesn't repeat
+const animatedMessageIds = new Set<string>();
+
 type NewsCardArticle = SearchNewsItem | NewsArticle;
 
 // Mask-based avatar renderer so any logo can be filled as pure white
@@ -33,7 +36,21 @@ interface MessageDisplayProps {
 
 }
 
-const formatText = (text: string) => {
+// Open a URL inside NovEra's in-app browser overlay when possible
+const openInNovEra = (url: string) => {
+  try {
+    if (/^https?:\/\//i.test(url)) {
+      window.dispatchEvent(new CustomEvent('nov-era-open-url' as any, { detail: url } as any));
+      return;
+    }
+    // tel:, mailto:, etc. fallback
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch {
+    try { window.open(url, '_blank'); } catch {}
+  }
+};
+
+const formatText = (text: string, onOpen: (url: string) => void) => {
   if (!text) return null;
 
   const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -50,15 +67,15 @@ const formatText = (text: string) => {
         {parts.map((part, partIndex) => {
           if (part.match(urlRegex)) {
             return (
-              <a
+              <button
                 key={`${lineIndex}-${partIndex}`}
-                href={part}
+                onClick={() => onOpen(part)}
                 className="text-accent underline hover:no-underline"
-                target="_blank"
-                rel="noopener noreferrer"
+                title={part}
+                type="button"
               >
                 {part}
-              </a>
+              </button>
             );
           }
           const boldParts = part.split(boldRegex);
@@ -75,7 +92,7 @@ const formatText = (text: string) => {
 };
 // Removed ModernProgress HUD in favor of pure typing effect
 
-const ImagePreview: React.FC<{ url: string }> = ({ url }) => {
+const ImagePreview: React.FC<{ url: string; onOpen: (url: string) => void }> = ({ url, onOpen }) => {
     const [hasError, setHasError] = useState(false);
     const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}`;
     // stage: 0 = original, 1 = proxy, 2 = placeholder
@@ -85,19 +102,19 @@ const ImagePreview: React.FC<{ url: string }> = ({ url }) => {
 
     if (hasError) {
         return (
-            <a href={url} target="_blank" rel="noopener noreferrer" className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105 flex items-center justify-center p-2">
+            <button onClick={() => onOpen(url)} className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105 flex items-center justify-center p-2">
                 <div className="text-center">
                     <svg className="mx-auto h-8 w-8 text-text-sub" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
                     <p className="mt-1 text-xs text-text-sub">Şəkil yüklənmədi</p>
                 </div>
-            </a>
+            </button>
         );
     }
 
     return (
-        <a href={url} target="_blank" rel="noopener noreferrer" className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105">
+        <button onClick={() => onOpen(url)} className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105">
             <img 
                 src={src} 
                 alt="Vizual önizləmə" 
@@ -109,11 +126,11 @@ const ImagePreview: React.FC<{ url: string }> = ({ url }) => {
                   else setHasError(true);
                 }}
             />
-        </a>
+        </button>
     );
 };
 
-const VideoPreview: React.FC<{ url: string }> = ({ url }) => {
+const VideoPreview: React.FC<{ url: string; onOpen: (url: string) => void }> = ({ url, onOpen }) => {
     const getYouTubeEmbedUrl = (videoUrl: string): string | null => {
         let videoId;
         try {
@@ -148,16 +165,16 @@ const VideoPreview: React.FC<{ url: string }> = ({ url }) => {
     }
     
     return (
-        <a href={url} target="_blank" rel="noopener noreferrer" className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105 flex items-center justify-center p-2">
+        <button onClick={() => onOpen(url)} className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105 flex items-center justify-center p-2">
             <div className="text-center">
                 <PlayIcon className="mx-auto h-10 w-10 text-text-sub" />
                 <p className="mt-2 text-xs text-text-sub">Videoya baxın</p>
             </div>
-        </a>
+        </button>
     );
 };
 
-const PlaceCard: React.FC<{ place: PlaceResult }> = ({ place }) => {
+const PlaceCard: React.FC<{ place: PlaceResult; onOpen: (url: string) => void }> = ({ place, onOpen }) => {
   const [thumbSrc, setThumbSrc] = useState<string | null>(place.thumbnailUrl || null);
   return (
     <div className="rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors">
@@ -179,10 +196,10 @@ const PlaceCard: React.FC<{ place: PlaceResult }> = ({ place }) => {
           )}
           <div className="flex flex-wrap gap-2 mt-2">
             {place.mapsUrl && (
-              <a href={place.mapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded-lg bg-accent/20 text-accent hover:bg-accent/30">Xəritədə aç</a>
+              <button onClick={() => onOpen(place.mapsUrl!)} className="text-xs px-2 py-1 rounded-lg bg-accent/20 text-accent hover:bg-accent/30">Xəritədə aç</button>
             )}
             {place.website && (
-              <a href={place.website} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 rounded-lg bg-white/10 text-white hover:bg-white/20">Sayt</a>
+              <button onClick={() => onOpen(place.website!)} className="text-xs px-2 py-1 rounded-lg bg-white/10 text-white hover:bg-white/20">Sayt</button>
             )}
             {place.phoneNumber && (
               <a href={`tel:${place.phoneNumber}`} className="text-xs px-2 py-1 rounded-lg bg-white/10 text-white hover:bg-white/20">Zəng et</a>
@@ -190,18 +207,56 @@ const PlaceCard: React.FC<{ place: PlaceResult }> = ({ place }) => {
           </div>
         </div>
       </div>
+      {/* Image Zoom Modal for chat images */}
+      {imageModalUrl && (
+        <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setImageModalUrl(null)}>
+          <div className="relative max-w-5xl w-full max-h-[90vh] bg-black/40 border border-white/20 rounded-xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setImageModalUrl(null)} className="absolute top-2 right-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white/90 text-sm border border-white/20">Bağla</button>
+            <div className="w-full h-full flex items-center justify-center p-3">
+              <img src={imageModalUrl} alt="şəkil" className="max-w-full max-h-[72vh] object-contain rounded-lg" />
+            </div>
+            <div className="flex items-center justify-between gap-2 px-3 pb-3">
+              <div className="text-xs text-white/70">Şəkil önizləmə</div>
+              <div className="flex items-center gap-2">
+                <a href={imageModalUrl} download className="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 text-white/90 text-sm border border-white/20">Yüklə</a>
+                <button
+                  onClick={async () => {
+                    try {
+                      if (navigator.share && /^https?:/i.test(imageModalUrl)) {
+                        await navigator.share({ title: 'Şəkil', url: imageModalUrl });
+                        setShareHint('Paylaşıldı');
+                        setTimeout(() => setShareHint(null), 1400);
+                        return;
+                      }
+                      await navigator.clipboard.writeText(imageModalUrl);
+                      setShareHint('Link kopyalandı');
+                      setTimeout(() => setShareHint(null), 1400);
+                    } catch {
+                      setShareHint('Paylaşmaq alınmadı');
+                      setTimeout(() => setShareHint(null), 1600);
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 text-white/90 text-sm border border-white/20"
+                >Paylaş</button>
+                <a href={imageModalUrl} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 text-white/90 text-sm border border-white/20">Yeni tab</a>
+              </div>
+            </div>
+            {shareHint && <div className="absolute left-3 bottom-3 text-xs text-white/80 bg-white/10 rounded-md px-2 py-1 border border-white/20">{shareHint}</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-const NewsCard: React.FC<{ article: SearchNewsItem | NewsArticle }> = ({ article }) => {
+const NewsCard: React.FC<{ article: SearchNewsItem | NewsArticle; onOpen: (url: string) => void }> = ({ article, onOpen }) => {
   const anyArt: any = article;
   const href: string = anyArt.link ?? anyArt.url ?? '#';
   const thumb: string | undefined = anyArt.imageUrl ?? anyArt.thumbnail;
   const dateText: string | undefined = anyArt.publishedAt ?? anyArt.date;
   const snippet: string | undefined = anyArt.summary ?? anyArt.snippet;
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="block rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors">
+    <button onClick={() => onOpen(href)} className="block text-left rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors w-full">
       <div className="flex items-start gap-4">
         {thumb && (
           <div className="w-32 h-24 rounded-lg overflow-hidden bg-bg-onyx flex-shrink-0">
@@ -219,11 +274,11 @@ const NewsCard: React.FC<{ article: SearchNewsItem | NewsArticle }> = ({ article
           {snippet && <p className="text-sm text-white/80 mt-2 line-clamp-2">{snippet}</p>}
         </div>
       </div>
-    </a>
+    </button>
   );
 };
 
-const ProductCard: React.FC<{ product: ShoppingProduct }> = ({ product }) => {
+const ProductCard: React.FC<{ product: ShoppingProduct; onOpen: (url: string) => void }> = ({ product, onOpen }) => {
   const normalizeLink = (url?: string): string => {
     if (!url) return '#';
     try {
@@ -236,7 +291,7 @@ const ProductCard: React.FC<{ product: ShoppingProduct }> = ({ product }) => {
   };
   const href = normalizeLink(product.link);
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="block rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors">
+    <button onClick={() => onOpen(href)} className="block text-left rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors w-full">
         {product.imageUrl && (
           <div className="aspect-square w-full bg-white/10 rounded-lg mb-3 overflow-hidden">
             <ProtectedImage
@@ -253,7 +308,7 @@ const ProductCard: React.FC<{ product: ShoppingProduct }> = ({ product }) => {
         {product.rating && (
             <div className="text-xs text-white/70 mt-1">⭐ {product.rating.toFixed(1)} ({product.reviews || 0})</div>
         )}
-    </a>
+    </button>
   );
 };
 
@@ -275,6 +330,8 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
   const [aiAvatarError, setAiAvatarError] = useState(false);
   const [displayText, setDisplayText] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [imageModalUrl, setImageModalUrl] = useState<string | null>(null);
+  const [shareHint, setShareHint] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -296,11 +353,17 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
     return () => { cancelled = true; };
   }, [aiAvatarUrl]);
 
-  // ChatGPT-like typing effect for model messages
+  // ChatGPT-like typing effect for model messages (only once per message id)
   useEffect(() => {
     if (isUser) { setDisplayText(message.text || ''); setIsStreaming(false); return; }
     const t = message.text || '';
     if (!t) { setDisplayText(''); setIsStreaming(!!message.isLoading); return; }
+    // If we've already animated this message id once, render fully without re-animating
+    if (animatedMessageIds.has(message.id)) {
+      setDisplayText(t);
+      setIsStreaming(false);
+      return;
+    }
     let i = 0;
     setDisplayText('');
     setIsStreaming(true);
@@ -310,10 +373,14 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
     const id = window.setInterval(() => {
       i = Math.min(t.length, i + step);
       setDisplayText(t.slice(0, i));
-      if (i >= t.length) { setIsStreaming(false); window.clearInterval(id); }
+      if (i >= t.length) {
+        setIsStreaming(false);
+        animatedMessageIds.add(message.id);
+        window.clearInterval(id);
+      }
     }, interval);
     return () => window.clearInterval(id);
-  }, [message.text, message.isLoading, isUser]);
+  }, [message.id, message.text, message.isLoading, isUser]);
 
   return (
     <div className={`py-6 md:py-8 ${isUser ? '' : 'bg-bg-slate/80'}`}>
@@ -338,7 +405,7 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
         </div>
         <div className="flex-grow">
           <div className={`max-w-none text-text-main leading-relaxed text-[15px] md:text-base ${isStreaming ? 'animate-[breath_2.4s_ease-in-out_infinite]' : ''}`}>
-             {formatText(displayText)}
+             {formatText(displayText, openInNovEra)}
              {isStreaming && <span className="inline-block w-[6px] h-4 align-[-1px] bg-white/80 rounded-[1px] ml-1 animate-[blink_1.1s_steps(2,_start)_infinite]"></span>}
              {message.isLoading && !displayText && (
                <div className="mt-2 space-y-2">
@@ -354,8 +421,8 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
             <div className="mt-6">
               <h3 className="text-lg font-semibold text-text-main mb-3">Vizuallar</h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                {message.images?.map((url) => <ImagePreview key={url} url={url} />)}
-                {message.videos?.map((url) => <VideoPreview key={url} url={url} />)}
+                {message.images?.map((url) => <ImagePreview key={url} url={url} onOpen={(u) => setImageModalUrl(u)} />)}
+                {message.videos?.map((url) => <VideoPreview key={url} url={url} onOpen={openInNovEra} />)}
               </div>
             </div>
           ) : null}
@@ -365,7 +432,7 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
               <h3 className="text-lg font-semibold text-text-main mb-3">Məkanlar</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {message.places.map((pl) => (
-                  <PlaceCard key={`${pl.mapsUrl || pl.title}`} place={pl} />
+                  <PlaceCard key={`${pl.mapsUrl || pl.title}`} place={pl} onOpen={openInNovEra} />
                 ))}
               </div>
             </div>
@@ -376,7 +443,7 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
               <h3 className="text-lg font-semibold text-text-main mb-3">Xəbərlər</h3>
               <div className="grid grid-cols-1 gap-4">
                 {message.news.map((article, index) => (
-                  <NewsCard key={index} article={article} />
+                  <NewsCard key={index} article={article} onOpen={openInNovEra} />
                 ))}
               </div>
             </div>
@@ -387,7 +454,7 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
               <h3 className="text-lg font-semibold text-text-main mb-3">Məhsullar</h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
                 {message.products.map((product, index) => (
-                  <ProductCard key={index} product={product} />
+                  <ProductCard key={index} product={product} onOpen={openInNovEra} />
                 ))}
               </div>
             </div>

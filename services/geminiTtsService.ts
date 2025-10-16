@@ -14,15 +14,22 @@ export interface GeminiTTSOptions {
 export async function geminiTts(text: string, opts: GeminiTTSOptions = {}): Promise<string> {
   const payload = {
     text,
-    voiceName: opts.voiceName || 'Kore',
+    voice_name: opts.voiceName || 'Kore',
   } as const;
 
+  const ORIGIN = (import.meta as any).env?.VITE_BACKEND_ORIGIN || (import.meta as any).env?.VITE_TTS_BACKEND_URL || '';
+  const abs = ORIGIN ? [`${ORIGIN.replace(/\/$/, '')}/api/gemini-tts`] : [];
   const endpoints = [
+    ...abs,
     '/api/gemini-tts',
     '/functions/gemini-tts',
     '/.netlify/functions/gemini-tts',
     '/api/gemini-tts.ts',
-    '/gemini-tts'
+    '/gemini-tts',
+    'http://localhost:8000/api/gemini-tts',
+    'http://localhost:8001/api/gemini-tts',
+    'http://127.0.0.1:8000/api/gemini-tts',
+    'http://0.0.0.0:8000/api/gemini-tts'
   ];
 
   let lastErr: any = null;

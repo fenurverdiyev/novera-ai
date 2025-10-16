@@ -21,65 +21,29 @@ const getSpeechRecognition = () => {
 };
 
 export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQuery, liveResponse, isResponding }) => {
-    const [transcript, setTranscript] = useState('');
     const [isCameraActive, setIsCameraActive] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [conversationState, setConversationState] = useState<ConversationState>('idle');
     const [speechSupported, setSpeechSupported] = useState(false);
+    const [transcript, setTranscript] = useState('');
 
     const recognitionRef = useRef<any>(null);
     const finalTranscriptRef = useRef<string>('');
     const shouldBeListeningRef = useRef(false);
-    const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const captureIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const silenceTimerRef = useRef<number | null>(null);
+    const captureIntervalRef = useRef<number | null>(null);
 
     const {
         capturedImages,
         isCapturing,
         startCapturing,
-        stopCapturing,
-        handleImageCaptured,
-        clearImages,
-        getImagesAsBase64
-    } = useCameraCapture();
-
-    const isListening = conversationState === 'listening';
-
-    useEffect(() => {
-        if (liveResponse && conversationState !== 'responding') {
-            setConversationState('responding');
-        } else if (!liveResponse && conversationState === 'responding') {
-            setConversationState('idle');
-        }
-    }, [liveResponse, conversationState]);
-
-    const cleanup = () => {
-        if (recognitionRef.current) {
-            shouldBeListeningRef.current = false;
-            recognitionRef.current.stop();
-            recognitionRef.current = null;
-        }
-        
-        if (captureIntervalRef.current) {
-            clearInterval(captureIntervalRef.current);
-            captureIntervalRef.current = null;
-        }
-        
-        if (silenceTimerRef.current) {
-            clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = null;
-        }
-        
-        stopCapturing();
-        clearImages();
-        setIsCameraActive(false);
-        setTranscript('');
+{{ ... }
         finalTranscriptRef.current = '';
         setError(null);
         setConversationState('idle');
     };
     
-    // Check speech recognition support on mount
+    // Initialize speech recognition on mount
     useEffect(() => {
         const SpeechRecognition = getSpeechRecognition();
         setSpeechSupported(!!SpeechRecognition);
@@ -88,33 +52,7 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
             setError('Brauzeriniz səs tanıma funksiyasını dəstəkləmir. Chrome və ya Edge istifadə edin.');
             return;
         }
-
-        // Initialize speech recognition
-        try {
-            const recognition = new SpeechRecognition();
-            recognition.continuous = true;
-            recognition.interimResults = true;
-            recognition.lang = 'az-AZ'; // Azerbaijani
-            
-            recognition.onstart = () => {
-                console.log('Speech recognition started');
-                setError(null);
-            };
-            
-            recognition.onresult = (event: any) => {
-                let interimTranscript = '';
-                let finalTranscript = '';
-                
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript;
-                    if (event.results[i].isFinal) {
-                        finalTranscript += transcript;
-                    } else {
-                        interimTranscript += transcript;
-                    }
-                }
-                
-                if (finalTranscript) {
+{{ ... }
                     finalTranscriptRef.current += finalTranscript;
                 }
                 
@@ -122,11 +60,12 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
                 
                 // Reset silence timer on speech
                 if (silenceTimerRef.current) {
-                    clearTimeout(silenceTimerRef.current);
+                    window.clearTimeout(silenceTimerRef.current);
+                    silenceTimerRef.current = null;
                 }
                 
                 // Set new silence timer
-                silenceTimerRef.current = setTimeout(() => {
+                silenceTimerRef.current = window.setTimeout(() => {
                     if (shouldBeListeningRef.current && finalTranscriptRef.current.trim()) {
                         handleStopListening();
                     }
@@ -137,21 +76,7 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
                 console.error('Speech recognition error:', event.error);
                 let errorMessage = 'Səs tanıma xətası baş verdi.';
                 
-                switch (event.error) {
-                    case 'network':
-                        errorMessage = 'İnternet bağlantısı problemi.';
-                        break;
-                    case 'not-allowed':
-                        errorMessage = 'Mikrofon icazəsi verilməyib. Brauzer ayarlarından mikrofon icazəsini verin.';
-                        break;
-                    case 'no-speech':
-                        errorMessage = 'Səs eşidilmədi. Yenidən cəhd edin.';
-                        break;
-                    case 'audio-capture':
-                        errorMessage = 'Mikrofon problemi. Mikrofonun düzgün bağlandığını yoxlayın.';
-                        break;
-                }
-                
+{{ ... }
                 setError(errorMessage);
                 setConversationState('idle');
                 shouldBeListeningRef.current = false;
@@ -159,7 +84,7 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
             
             recognition.onend = () => {
                 console.log('Speech recognition ended');
-                if (shouldBeListeningRef.current && conversationState === 'listening') {
+                if (shouldBeListeningRef.current) {
                     // Restart if we should still be listening
                     try {
                         recognition.start();
@@ -181,38 +106,23 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
         
         return () => {
             if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.stop();
-                } catch (e) {
-                    console.error('Error stopping recognition:', e);
-                }
+                try { recognitionRef.current.stop(); } catch (e) { console.error('Error stopping recognition:', e); }
             }
+            if (silenceTimerRef.current) { window.clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
         };
-    }, [conversationState]);
+    }, []);
     
     useEffect(() => {
         if (!isOpen) {
             cleanup();
             return;
-        }
-
-        if (!speechSupported) {
-            setError('Brauzeriniz səs tanıma funksiyasını dəstəkləmir. Chrome və ya Edge istifadə edin.');
-            return;
-        }
-
-        return cleanup;
-    }, [isOpen, speechSupported]);
-    
-    const handleToggleListen = () => {
-        const recognition = recognitionRef.current;
-        if (!recognition) {
+{{ ... }
             setError("Səs tanıma mövcud deyil.");
             return;
         }
     
         if (isListening) {
-            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+            if (silenceTimerRef.current) { window.clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
             shouldBeListeningRef.current = false;
             recognition.stop();
             
@@ -220,45 +130,27 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
             if (isCameraActive) {
                 stopCapturing();
             }
-            
-            setConversationState('processing');
-            const queryText = finalTranscriptRef.current.trim() || transcript.trim();
-            const images = isCameraActive ? getImagesAsBase64() : [];
-            
-            if (queryText || images.length > 0) {
-                onQuery(queryText, images);
-            } else {
-                setConversationState('idle');
-            }
-        } else {
-            setTranscript('');
-            finalTranscriptRef.current = '';
-            clearImages();
-            shouldBeListeningRef.current = true;
-            
-            // Start camera capturing if camera is active
-            if (isCameraActive) {
-                startCapturing();
-            }
-            
-            try {
-                recognition.start();
-            } catch (e: any) {
-                console.error("Could not start recognition:", e);
-                 if (e.name !== 'InvalidStateError') {
+{{ ... }
                   setError("Səs tanıma başladılmadı.");
                   shouldBeListeningRef.current = false;
                   setConversationState('idle');
                 }
             }
         }
-    };
+    }, [isOpen, isListening, recognition, isCameraActive, stopCapturing]);
 
-    const handleToggleCamera = () => {
-        setIsCameraActive(!isCameraActive);
-        if (isCameraActive) {
-            stopCapturing();
-            clearImages();
+    // Finalize listening due to silence
+    const handleStopListening = () => {
+        const recognition = recognitionRef.current;
+        if (!recognition) return;
+        if (silenceTimerRef.current) { window.clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+        shouldBeListeningRef.current = false;
+        try { recognition.stop(); } catch {}
+        if (isCameraActive) { stopCapturing(); }
+        setConversationState('processing');
+        const queryText = finalTranscriptRef.current.trim() || transcript.trim();
+        const images = isCameraActive ? getImagesAsBase64() : [];
+        if (queryText || images.length > 0) onQuery(queryText, images); else setConversationState('idle');
         }
     };
 
