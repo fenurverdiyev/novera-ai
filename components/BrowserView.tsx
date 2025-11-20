@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react';
-import { SearchIcon, LoadingSpinner, MicrophoneIcon, CameraIcon, CloseIcon, ArrowLeftIcon, MaximizeIcon, MinimizeIcon, MenuIcon } from './Icons';
+import { createPortal } from 'react-dom';
+import { SearchIcon, LoadingSpinner, MicrophoneIcon, CameraIcon, CloseIcon, ArrowLeftIcon, MaximizeIcon, MinimizeIcon, MenuIcon, PlusIcon } from './Icons';
 import { ArrowRightIcon, RefreshIcon } from './BrowserIcons';
 import { suggestAutocomplete, detectLocaleForSearch, searchImagesAndVideos, searchNews, searchShopping, searchWeb } from '../services/searchService';
 import { answerWithGroundedSearch, streamChatQuery } from '../services/geminiService';
@@ -120,6 +121,14 @@ const normalizeUrl = (val: string): string => {
   let s = (val || '').trim();
   if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
   try { return new URL(s).href; } catch { return s; }
+};
+
+// Heuristic: is URL pointing to an image resource
+const isImageUrlLike = (u: string): boolean => {
+  try {
+    const s = (u || '').toLowerCase();
+    return /\.(png|jpg|jpeg|gif|webp|bmp|svg|ico|tif|tiff)([$?#]|$)/i.test(s);
+  } catch { return false; }
 };
 
 // Wrap target URL with proxy origin. Prefer embedding variants first (e.g., YouTube), then proxy.
@@ -247,9 +256,11 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   const [overlayEmbedMode, setOverlayEmbedMode] = useState<'embed' | 'reader'>('embed');
   const [overlayChromeHidden, setOverlayChromeHidden] = useState(false);
   const [overlayOpenMode, setOverlayOpenMode] = useState<'original' | 'proxy'>('proxy');
+  const [overlayLoading, setOverlayLoading] = useState(false);
   const overlayLoadedRef = useRef<boolean>(false);
   const overlayFallbackTimerRef = useRef<number | null>(null);
   const overlayContainerRef = useRef<HTMLDivElement>(null);
+  const bodyOverflowPrevRef = useRef<string | null>(null);
   const [isFullscreenActive, setIsFullscreenActive] = useState(false);
   const [overlayMenuOpen, setOverlayMenuOpen] = useState(false);
   const [authEmail, setAuthEmail] = useState<string | null>(null);
@@ -258,6 +269,357 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   const [overlayIncognito, setOverlayIncognito] = useState(false);
   const [overlayNotice, setOverlayNotice] = useState<string | null>(null);
   const [hasNextPage, setHasNextPage] = useState<boolean>(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [overlayShellOpen, setOverlayShellOpen] = useState(false);
+  // Desktop home omnibox state (history + suggestions)
+  const [hbQuery, setHbQuery] = useState('');
+  const [hbSuggestions, setHbSuggestions] = useState<string[]>([]);
+  const [hbActiveIndex, setHbActiveIndex] = useState<number>(-1);
+  const [hbFocused, setHbFocused] = useState(false);
+  const hbDebounceRef = useRef<number | null>(null);
+  const [hbHistory, setHbHistory] = useState<string[]>([]);
+  useEffect(() => {
+    const check = () => {
+      try {
+        const mq = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+        const ua = navigator.userAgent || '';
+        const uaMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(ua);
+        setIsMobile(!!(mq || uaMobile));
+      } catch { setIsMobile(false); }
+    };
+    check();
+    window.addEventListener('resize', check);
+    window.addEventListener('orientationchange', check as any);
+    return () => { window.removeEventListener('resize', check); window.removeEventListener('orientationchange', check as any); };
+  }, []);
+
+  // Load history for desktop omnibox
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('novEra.search.history');
+      const arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr)) setHbHistory(arr as string[]);
+    } catch {}
+  }, []);
+
+  // Incognito results mode (for desktop header suggestions gating)
+  const [incogResultsActive, setIncogResultsActive] = useState<boolean>(false);
+
+  // Suggestions for desktop omnibox (history for <2 chars, autocomplete for >=2)
+  useEffect(() => {
+    if (!hbFocused) { setHbSuggestions([]); setHbActiveIndex(-1); return; }
+    // In Incognito or when viewing results originated from Incognito, never show suggestions/history
+    if (overlayIncognito || incogResultsActive) { setHbSuggestions([]); setHbActiveIndex(-1); return; }
+    if (hbDebounceRef.current) window.clearTimeout(hbDebounceRef.current);
+    const q = hbQuery.trim();
+    if (q.length < 2) {
+      setHbSuggestions(hbHistory);
+      setHbActiveIndex(hbHistory.length ? 0 : -1);
+      return;
+    }
+    const { hl, gl } = detectLocaleForSearch();
+    hbDebounceRef.current = window.setTimeout(async () => {
+      try {
+        const res = await suggestAutocomplete(q, { hl, gl });
+        const items = (res || []).slice(0, 8);
+        setHbSuggestions(items);
+        setHbActiveIndex(items.length ? 0 : -1);
+      } catch {
+        setHbSuggestions([]);
+        setHbActiveIndex(-1);
+      }
+    }, 200);
+    return () => { if (hbDebounceRef.current) window.clearTimeout(hbDebounceRef.current); };
+  }, [hbQuery, hbFocused, hbHistory, overlayIncognito, incogResultsActive]);
+
+  const submitHeader = useCallback((val?: string) => {
+    const q = (val ?? hbQuery).trim();
+    if (!q) return;
+    // Reflect query in current header tab title (normal/incognito)
+    try {
+      if (overlayIncognito) {
+        setTabsIncog(prev => {
+          const id = activeTabIdIncog;
+          return prev.map(t => t.id === id ? { ...t, title: q } : t);
+        });
+      } else {
+        setTabsNormal(prev => {
+          const id = activeTabIdNormal;
+          return prev.map(t => t.id === id ? { ...t, title: q } : t);
+        });
+      }
+    } catch {}
+    if (isProbablyUrl(q)) {
+      openOverlay(normalizeUrl(q));
+    } else {
+      doSearch(1, q);
+    }
+    // persist history (disabled in Incognito and Incognito-originated results)
+    if (!(overlayIncognito || incogResultsActive)) {
+      try {
+        const cleaned = q.slice(0, 200);
+        let next = hbHistory.filter(p => p.toLowerCase() !== cleaned.toLowerCase());
+        next.unshift(cleaned);
+        if (next.length > 20) next = next.slice(0, 20);
+        localStorage.setItem('novEra.search.history', JSON.stringify(next));
+        setHbHistory(next);
+      } catch {}
+    }
+    setHbQuery('');
+    setHbSuggestions([]);
+    setHbActiveIndex(-1);
+  }, [hbQuery, hbHistory]);
+
+  // No auto-open; keep home screen visible until user navigates or opens incognito
+
+  // Simple overlay tabs (separate sets for normal and incognito)
+  interface OverlayTab { id: string; url: string | null; title: string; history: string[]; historyIndex: number; }
+  const [tabsNormal, setTabsNormal] = useState<OverlayTab[]>([]);
+  const [tabsIncog, setTabsIncog] = useState<OverlayTab[]>([]);
+  const [activeTabIdNormal, setActiveTabIdNormal] = useState<string | null>(null);
+  const [activeTabIdIncog, setActiveTabIdIncog] = useState<string | null>(null);
+  const [showTabSwitcher, setShowTabSwitcher] = useState(false);
+  const [tabSearch, setTabSearch] = useState('');
+
+  // Per-tab search state store (so each tab remembers its own results/lobby)
+  interface TabSearchState {
+    query: string;
+    page: number;
+    results: SearchItem[];
+    imageResults: ImageResult[];
+    videoUrls: string[];
+    newsItems: NewsArticle[];
+    products: ShoppingProduct[];
+    resultsHistory: number[];
+    resultsIndex: number;
+    forwardFromLobby: { query: string; page: number } | null;
+    activeTabView: 'web' | 'images' | 'videos' | 'news' | 'shopping';
+    hasNextPage: boolean;
+    error: string | null;
+    fromIncogResults: boolean;
+    previewUrl: string;
+  }
+  const [tabSearchStore, setTabSearchStore] = useState<Record<string, TabSearchState>>({});
+  const tabKey = useCallback((inc: boolean, id: string | null) => `${inc ? 'i' : 'n'}:${id || ''}`, []);
+  const defaultTabSearch = useCallback((): TabSearchState => ({
+    query: '', page: 1, results: [], imageResults: [], videoUrls: [], newsItems: [], products: [],
+    resultsHistory: [], resultsIndex: -1, forwardFromLobby: null, activeTabView: 'web',
+    hasNextPage: false, error: null, fromIncogResults: false, previewUrl: ''
+  }), []);
+  const applySearchState = useCallback((st?: TabSearchState) => {
+    const s = st || defaultTabSearch();
+    setQuery(s.query);
+    setPage(s.page);
+    setResults(s.results);
+    setImageResults(s.imageResults);
+    setVideoUrls(s.videoUrls);
+    setNewsItems(s.newsItems);
+    setProducts(s.products);
+    setResultsHistory(s.resultsHistory);
+    setResultsIndex(s.resultsIndex);
+    setForwardFromLobby(s.forwardFromLobby);
+    setActiveTab(s.activeTabView);
+    setHasNextPage(s.hasNextPage);
+    setError(s.error);
+    setFromIncogResults(s.fromIncogResults);
+    setPreviewUrl(s.previewUrl);
+  }, [defaultTabSearch]);
+
+  const currentOverlayTab = useMemo(() => {
+    const list = overlayIncognito ? tabsIncog : tabsNormal;
+    const id = overlayIncognito ? activeTabIdIncog : activeTabIdNormal;
+    return list.find(t => t.id === id) || null;
+  }, [overlayIncognito, tabsNormal, tabsIncog, activeTabIdNormal, activeTabIdIncog]);
+
+  const makeNewTab = useCallback((initialUrl: string | null): OverlayTab => {
+    const u = initialUrl || null;
+    const title = u ? getHost(u).replace(/^www\./,'') : 'Yeni Tab';
+    return { id: Math.random().toString(36).slice(2), url: u, title, history: u ? [u] : [], historyIndex: u ? 0 : -1 };
+  }, []);
+
+  useEffect(() => {
+    setTabsNormal(prev => {
+      if (prev.length > 0) return prev;
+      const nt = makeNewTab(null);
+      setActiveTabIdNormal(nt.id);
+      try { const k = tabKey(false, nt.id); setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() })); } catch {}
+      return [nt];
+    });
+  }, [makeNewTab, tabKey, defaultTabSearch]);
+
+  const setActiveTabCommon = useCallback((tab: OverlayTab | null) => {
+    setOverlayUrl((prev) => {
+      const next = tab ? tab.url : null;
+      if (prev !== next) setOverlayKey(k => k + 1);
+      return next;
+    });
+    setOverlayHistory(tab ? tab.history : []);
+    setOverlayIndex(tab ? tab.historyIndex : -1);
+  }, []);
+
+  // Per-tab search snapshot helpers (hoisted function declarations)
+  function getSearchSnapshot(): TabSearchState {
+    return {
+      query, page, results, imageResults, videoUrls, newsItems, products,
+      resultsHistory, resultsIndex, forwardFromLobby, activeTabView: activeTab,
+      hasNextPage, error, fromIncogResults, previewUrl
+    };
+  }
+  function saveCurrentTabSearch() {
+    const id = overlayIncognito ? activeTabIdIncog : activeTabIdNormal;
+    if (!id) return;
+    const k = tabKey(overlayIncognito, id);
+    const snap = getSearchSnapshot();
+    setTabSearchStore(prev => ({ ...prev, [k]: snap }));
+  }
+
+  const openNewTab = useCallback((initialUrl: string | null = null) => {
+    try { saveCurrentTabSearch(); } catch {}
+    const t = makeNewTab(initialUrl);
+    if (overlayIncognito) {
+      setTabsIncog(prev => [...prev, t]);
+      setActiveTabIdIncog(t.id);
+    } else {
+      setTabsNormal(prev => [...prev, t]);
+      setActiveTabIdNormal(t.id);
+    }
+    setActiveTabCommon(t);
+    // initialize search store for new tab if it's empty
+    try {
+      const k = tabKey(overlayIncognito, t.id);
+      setTabSearchStore(prev => (prev[k] ? prev : { ...prev, [k]: defaultTabSearch() }));
+    } catch {}
+    setOverlayShellOpen(true);
+    setShowTabSwitcher(false);
+  }, [overlayIncognito, makeNewTab, setActiveTabCommon, saveCurrentTabSearch, tabKey, defaultTabSearch]);
+
+  // Create tab without opening overlay (used on home header + button)
+  const openNewTabLocal = useCallback(() => {
+    // Save the current tab's search BEFORE switching active tab
+    try { saveCurrentTabSearch(); } catch {}
+    const t = makeNewTab(null);
+    if (overlayIncognito) {
+      setTabsIncog(prev => [...prev, t]);
+      setActiveTabIdIncog(t.id);
+    } else {
+      setTabsNormal(prev => [...prev, t]);
+      setActiveTabIdNormal(t.id);
+    }
+    setActiveTabCommon(t);
+    // Initialize the new tab's store and show empty lobby state
+    try {
+      const k = tabKey(overlayIncognito, t.id);
+      setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() }));
+      applySearchState(defaultTabSearch());
+    } catch {}
+    // Return to lobby view (no overlay); keep current mode (normal/incognito)
+    setOverlayShellOpen(false);
+    setOverlayChromeHidden(false);
+    setShowTabSwitcher(false);
+  }, [overlayIncognito, makeNewTab, setActiveTabCommon, saveCurrentTabSearch, tabKey, defaultTabSearch, applySearchState]);
+
+  // Listen for global request to create a new tab (from Sidebar '+')
+  useEffect(() => {
+    const onNewTab = () => { try { openNewTabLocal(); } catch {} };
+    window.addEventListener('nov-era-new-tab' as any, onNewTab as any);
+    return () => window.removeEventListener('nov-era-new-tab' as any, onNewTab as any);
+  }, [openNewTabLocal]);
+
+  // From WebView overlay, opening a new tab should return to the same mode's lobby
+  const openHeaderNewTabFromOverlay = useCallback(() => {
+    // Save the current tab's search BEFORE switching active tab
+    try { saveCurrentTabSearch(); } catch {}
+    const t = makeNewTab(null);
+    if (overlayIncognito) {
+      setTabsIncog(prev => [...prev, t]);
+      setActiveTabIdIncog(t.id);
+    } else {
+      setTabsNormal(prev => [...prev, t]);
+      setActiveTabIdNormal(t.id);
+    }
+    // Initialize new tab lobby search state
+    try {
+      const k = tabKey(overlayIncognito, t.id);
+      setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() }));
+      applySearchState(defaultTabSearch());
+    } catch {}
+    // close overlay shell and reset state (stay in the same mode)
+    setActiveTabCommon(t);
+    setOverlayShellOpen(false);
+    setOverlayUrl(null);
+    setOverlayHistory([]);
+    setOverlayIndex(-1);
+    setOverlayChromeHidden(false);
+  }, [makeNewTab, overlayIncognito, saveCurrentTabSearch, tabKey, defaultTabSearch, applySearchState, setActiveTabCommon]);
+
+  const closeTabById = useCallback((id: string) => {
+    if (overlayIncognito) {
+      setTabsIncog(prev => {
+        const idx = prev.findIndex(t => t.id === id);
+        if (idx === -1) return prev;
+        const next = prev.filter(t => t.id !== id);
+        let newActive: OverlayTab | null = null;
+        if (activeTabIdIncog === id) {
+          if (next.length) {
+            const pick = Math.max(0, idx - 1);
+            setActiveTabIdIncog(next[pick].id);
+            newActive = next[pick];
+          } else {
+            const nt = makeNewTab(null);
+            setActiveTabIdIncog(nt.id);
+            setTabsIncog([nt]);
+            newActive = nt;
+            return [nt];
+          }
+        }
+        if (newActive) setActiveTabCommon(newActive);
+        return next;
+      });
+    } else {
+      setTabsNormal(prev => {
+        const idx = prev.findIndex(t => t.id === id);
+        if (idx === -1) return prev;
+        const next = prev.filter(t => t.id !== id);
+        let newActive: OverlayTab | null = null;
+        if (activeTabIdNormal === id) {
+          if (next.length) {
+            const pick = Math.max(0, idx - 1);
+            setActiveTabIdNormal(next[pick].id);
+            newActive = next[pick];
+          } else {
+            const nt = makeNewTab(null);
+            setActiveTabIdNormal(nt.id);
+            setTabsNormal([nt]);
+            newActive = nt;
+            return [nt];
+          }
+        }
+        if (newActive) setActiveTabCommon(newActive);
+        return next;
+      });
+    }
+  }, [overlayIncognito, activeTabIdIncog, activeTabIdNormal, makeNewTab, setActiveTabCommon]);
+
+  const switchToTab = useCallback((id: string) => {
+    if (overlayIncognito) {
+      try { saveCurrentTabSearch(); } catch {}
+      setActiveTabIdIncog(id);
+      const t = tabsIncog.find(x => x.id === id) || null;
+      setActiveTabCommon(t);
+      // If the selected tab has content, show overlay; otherwise lobby
+      setOverlayShellOpen(!!(t && t.url));
+      setOverlayChromeHidden(false);
+      try { const k = tabKey(true, id); applySearchState(tabSearchStore[k]); } catch {}
+    } else {
+      try { saveCurrentTabSearch(); } catch {}
+      setActiveTabIdNormal(id);
+      const t = tabsNormal.find(x => x.id === id) || null;
+      setActiveTabCommon(t);
+      setOverlayShellOpen(!!(t && t.url));
+      setOverlayChromeHidden(false);
+      try { const k = tabKey(false, id); applySearchState(tabSearchStore[k]); } catch {}
+    }
+  }, [overlayIncognito, tabsIncog, tabsNormal, setActiveTabCommon, saveCurrentTabSearch, tabKey, tabSearchStore, applySearchState]);
   // AI analysis state
   const [aiLoading, setAiLoading] = useState(false);
   const [aiText, setAiText] = useState<string>('');
@@ -273,6 +635,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   // Hold images selected by user (camera/gallery) until they press Search
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [fromIncogResults, setFromIncogResults] = useState<boolean>(false);
+  useEffect(() => { try { setIncogResultsActive(!!fromIncogResults); } catch {} }, [fromIncogResults]);
   // AI analysis attachments: inputs
   const aiFileInputRef = useRef<HTMLInputElement>(null);
   const aiGalleryInputRef = useRef<HTMLInputElement>(null);
@@ -313,6 +676,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   const currentQueryRef = useRef<string>('');
   const openOverlay = (url: string) => {
     setOverlaySearch('');
+    setOverlayLoading(true);
     setOverlayHistory(prev => {
       const base = overlayIndex >= 0 ? prev.slice(0, overlayIndex + 1) : [];
       const next = [...base, url];
@@ -328,39 +692,166 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     const embedCandidate = toEmbedUrl(url);
     const quickFallback = (host.includes('youtube.com') || host === 'youtu.be') && embedCandidate === url;
     setOverlayUrl(url);
+    setOverlayShellOpen(true);
+    try { window.scrollTo({ top: 0, behavior: 'auto' as any }); } catch { try { window.scrollTo(0, 0); } catch {} }
+    // Update current tab model
+    if (overlayIncognito) {
+      setTabsIncog(prev => {
+        const id = activeTabIdIncog;
+        const existing = id ? prev.find(t => t.id === id) : undefined;
+        if (!existing) {
+          const nt = makeNewTab(url);
+          setActiveTabIdIncog(nt.id);
+          return [...prev, nt];
+        }
+        const base = existing.historyIndex >= 0 ? existing.history.slice(0, existing.historyIndex + 1) : existing.history.slice();
+        const history = [...base, url];
+        const updated = { ...existing, url, title: getHost(url).replace(/^www\./,''), history, historyIndex: history.length - 1 };
+        return prev.map(t => t.id === existing.id ? updated : t);
+      });
+    } else {
+      setTabsNormal(prev => {
+        const id = activeTabIdNormal;
+        const existing = id ? prev.find(t => t.id === id) : undefined;
+        if (!existing) {
+          const nt = makeNewTab(url);
+          setActiveTabIdNormal(nt.id);
+          return [...prev, nt];
+        }
+        const base = existing.historyIndex >= 0 ? existing.history.slice(0, existing.historyIndex + 1) : existing.history.slice();
+        const history = [...base, url];
+        const updated = { ...existing, url, title: getHost(url).replace(/^www\./,''), history, historyIndex: history.length - 1 };
+        return prev.map(t => t.id === existing.id ? updated : t);
+      });
+    }
     setOverlayKey(k => k + 1);
     setOverlayChromeHidden(false);
+    // Always start in Web View (proxy) for full-page experience
+    setOverlayOpenMode('proxy');
+    const openExternal = (_u: string) => { /* disabled by preference: no external redirects */ };
+    const startTimer = () => {
+      if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; }
+      overlayFallbackTimerRef.current = window.setTimeout(() => {
+        if (!overlayLoadedRef.current) {
+          // Stay in overlay: switch/reload proxy silently
+          setOverlayOpenMode('proxy');
+          setOverlayKey(k => k + 1);
+        }
+      }, isMobile ? 1800 : 2500);
+    };
+    startTimer();
   };
   const closeOverlay = () => {
+    // Preserve current tab's search snapshot
+    try { saveCurrentTabSearch(); } catch {}
+    // Clear overlay chrome state
     setOverlayUrl(null);
     setOverlayHistory([]);
     setOverlayIndex(-1);
-    setOverlayIncognito(false);
+    setOverlayShellOpen(false);
+    setOverlayLoading(false);
+    // Mark current tab as lobby (no active site) so returning shows results
+    try {
+      if (overlayIncognito) {
+        setTabsIncog(prev => {
+          const id = activeTabIdIncog;
+          if (!id) return prev;
+          return prev.map(t => t.id === id ? { ...t, url: null } : t);
+        });
+      } else {
+        setTabsNormal(prev => {
+          const id = activeTabIdNormal;
+          if (!id) return prev;
+          return prev.map(t => t.id === id ? { ...t, url: null } : t);
+        });
+      }
+    } catch {}
     if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; }
     try { onOverlayClosed?.(); } catch {}
   };
   const navigateOverlay = (url: string) => {
     if (!url) return;
-    if (!overlayIncognito) {
-      setOverlayHistory(prev => {
-        const base = overlayIndex >= 0 ? prev.slice(0, overlayIndex + 1) : [];
-        const next = [...base, url];
-        setOverlayIndex(next.length - 1);
-        return next;
-      });
-    }
+    setOverlayLoading(true);
+    // Track overlay history also for incognito (UI-only, not persisted)
+    setOverlayHistory(prev => {
+      const base = overlayIndex >= 0 ? prev.slice(0, overlayIndex + 1) : [];
+      const next = [...base, url];
+      setOverlayIndex(next.length - 1);
+      return next;
+    });
     setOverlayUrl(url);
     setOverlayKey(x => x + 1);
+    try { window.scrollTo({ top: 0, behavior: 'auto' as any }); } catch { try { window.scrollTo(0, 0); } catch {} }
     overlayLoadedRef.current = false;
     setOverlayNotice(null);
+    // Always use Web View (proxy) for subsequent navigations as well
+    setOverlayOpenMode('proxy');
+    // Update tab model
+    if (overlayIncognito) {
+      setTabsIncog(prev => {
+        const id = activeTabIdIncog;
+        const existing = id ? prev.find(t => t.id === id) : undefined;
+        if (!existing) return prev;
+        const base = existing.historyIndex >= 0 ? existing.history.slice(0, existing.historyIndex + 1) : existing.history.slice();
+        const history = [...base, url];
+        const updated = { ...existing, url, title: getHost(url).replace(/^www\./,''), history, historyIndex: history.length - 1 };
+        return prev.map(t => t.id === existing.id ? updated : t);
+      });
+    } else {
+      setTabsNormal(prev => {
+        const id = activeTabIdNormal;
+        const existing = id ? prev.find(t => t.id === id) : undefined;
+        if (!existing) return prev;
+        const base = existing.historyIndex >= 0 ? existing.history.slice(0, existing.historyIndex + 1) : existing.history.slice();
+        const history = [...base, url];
+        const updated = { ...existing, url, title: getHost(url).replace(/^www\./,''), history, historyIndex: history.length - 1 };
+        return prev.map(t => t.id === existing.id ? updated : t);
+      });
+    }
+    // We already set proxy mode; keep timer harmless for edge cases
+    const openExternal = (_u: string) => { /* disabled by preference: no external redirects */ };
+    if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; }
+    overlayFallbackTimerRef.current = window.setTimeout(() => {
+      if (!overlayLoadedRef.current) {
+        // Stay in overlay: switch/reload proxy silently
+        setOverlayOpenMode('proxy');
+        setOverlayKey(k => k + 1);
+      }
+    }, isMobile ? 1800 : 2500);
   };
   const goBack = () => {
     if (overlayIndex > 0) {
       const idx = overlayIndex - 1;
       setOverlayIndex(idx);
       const u = overlayHistory[idx];
+      setOverlayLoading(true);
       setOverlayUrl(u);
       setOverlayKey(k => k + 1);
+      // sync tab model
+      if (overlayIncognito) {
+        setTabsIncog(prev => {
+          const id = activeTabIdIncog; const t = id ? prev.find(x => x.id === id) : undefined; if (!t) return prev;
+          const updated = { ...t, url: u, historyIndex: idx };
+          return prev.map(x => x.id === t.id ? updated : x);
+        });
+      } else {
+        setTabsNormal(prev => {
+          const id = activeTabIdNormal; const t = id ? prev.find(x => x.id === id) : undefined; if (!t) return prev;
+          const updated = { ...t, url: u, historyIndex: idx };
+          return prev.map(x => x.id === t.id ? updated : x);
+        });
+      }
+    } else if (overlayIncognito && overlayIndex <= 0) {
+      // From the first incognito page, Back returns to incognito lobby
+      setOverlayIndex(-1);
+      setOverlayUrl(null);
+      setOverlayShellOpen(false);
+      setOverlayLoading(false);
+      setTabsIncog(prev => {
+        const id = activeTabIdIncog; const t = id ? prev.find(x => x.id === id) : undefined; if (!t) return prev;
+        const updated = { ...t, url: null, historyIndex: -1 } as any;
+        return prev.map(x => x.id === (t as any).id ? updated : x);
+      });
     }
   };
   const goForward = () => {
@@ -368,11 +859,40 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       const idx = overlayIndex + 1;
       setOverlayIndex(idx);
       const u = overlayHistory[idx];
+      setOverlayLoading(true);
       setOverlayUrl(u);
       setOverlayKey(k => k + 1);
+      if (overlayIncognito) {
+        setTabsIncog(prev => {
+          const id = activeTabIdIncog; const t = id ? prev.find(x => x.id === id) : undefined; if (!t) return prev;
+          const updated = { ...t, url: u, historyIndex: idx };
+          return prev.map(x => x.id === t.id ? updated : x);
+        });
+      } else {
+        setTabsNormal(prev => {
+          const id = activeTabIdNormal; const t = id ? prev.find(x => x.id === id) : undefined; if (!t) return prev;
+          const updated = { ...t, url: u, historyIndex: idx };
+          return prev.map(x => x.id === t.id ? updated : x);
+        });
+      }
+    } else if (overlayIncognito && overlayIndex === -1 && overlayHistory.length > 0) {
+      // From incognito lobby, Forward opens the first page in history (if any)
+      const idx = 0; const u = overlayHistory[0];
+      setOverlayIndex(idx);
+      setOverlayLoading(true);
+      setOverlayUrl(u);
+      setOverlayKey(k => k + 1);
+      setOverlayShellOpen(true);
+      setTabsIncog(prev => {
+        const id = activeTabIdIncog; const t = id ? prev.find(x => x.id === id) : undefined; if (!t) return prev;
+        const hi = (t.history || []).indexOf(u);
+        const newIdx = hi >= 0 ? hi : (t.history && t.history.length ? 0 : -1);
+        const updated = { ...t, url: u, historyIndex: newIdx } as any;
+        return prev.map(x => x.id === (t as any).id ? updated : x);
+      });
     }
   };
-  const reloadOverlay = () => { overlayLoadedRef.current = false; setOverlayKey(k => k + 1); };
+  const reloadOverlay = () => { overlayLoadedRef.current = false; setOverlayLoading(true); setOverlayKey(k => k + 1); };
 
   // If parent asks to open a URL, open overlay immediately
   useEffect(() => {
@@ -381,7 +901,37 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       try { onOpenedOverlay?.(); } catch {}
     }
   }, [openOverlayUrl]);
-  // Open Incognito overlay when requested by parent
+  // When overlay is open, lock background scroll
+  useEffect(() => {
+    const wantLock = !!(overlayShellOpen || overlayUrl);
+    try {
+      if (wantLock) {
+        if (bodyOverflowPrevRef.current == null) bodyOverflowPrevRef.current = document.body.style.overflow || '';
+        document.body.style.overflow = 'hidden';
+      } else {
+        if (bodyOverflowPrevRef.current != null) {
+          document.body.style.overflow = bodyOverflowPrevRef.current;
+          bodyOverflowPrevRef.current = null;
+        }
+      }
+    } catch {}
+    return () => {
+      try {
+        if (bodyOverflowPrevRef.current != null) {
+          document.body.style.overflow = bodyOverflowPrevRef.current;
+          bodyOverflowPrevRef.current = null;
+        }
+      } catch {}
+    };
+  }, [overlayShellOpen, overlayUrl]);
+
+  // Close page (hamburger) menu whenever overlay opens
+  useEffect(() => {
+    if (overlayShellOpen || overlayUrl) {
+      try { setPageMenuOpen(false); } catch {}
+    }
+  }, [overlayShellOpen, overlayUrl]);
+  // Open Incognito mode when requested by parent (do NOT auto-open WebView)
   useEffect(() => {
     if (openIncognito) {
       setOverlayIncognito(true);
@@ -390,6 +940,14 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       setOverlayIndex(-1);
       setOverlaySearch('');
       setOverlayChromeHidden(false);
+      setOverlayShellOpen(false);
+      setTabsIncog(prev => {
+        if (prev.length > 0) return prev;
+        const nt = makeNewTab(null);
+        setActiveTabIdIncog(nt.id);
+        try { const k = tabKey(true, nt.id); setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() })); } catch {}
+        return [nt];
+      });
       try { onOpenedIncognito?.(); } catch {}
     }
   }, [openIncognito]);
@@ -397,7 +955,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!overlayUrl) return;
-      if (e.key === 'Escape') { e.preventDefault(); setOverlayChromeHidden(v => !v); }
+      if (e.key === 'Escape' && e.ctrlKey) { e.preventDefault(); setOverlayChromeHidden(v => !v); }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -487,6 +1045,20 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       setError('Zəhmət olmasa, axtarış üçün sorğu daxil edin.');
       return;
     }
+    // Update current header tab title with query
+    try {
+      if (overlayIncognito) {
+        setTabsIncog(prev => {
+          const id = activeTabIdIncog;
+          return prev.map(t => t.id === id ? { ...t, title: qStr } : t);
+        });
+      } else {
+        setTabsNormal(prev => {
+          const id = activeTabIdNormal;
+          return prev.map(t => t.id === id ? { ...t, title: qStr } : t);
+        });
+      }
+    } catch {}
     // Note: If CSE creds yoxdursa, Serper fallback istifadə olunacaq
     setLoading(true);
     setError(null);
@@ -602,7 +1174,12 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     } finally {
       setLoading(false);
     }
-  }, [query]);
+  }, [query, overlayIncognito, activeTabIdIncog, activeTabIdNormal]);
+
+  // Auto-persist current tab's search state on changes
+  useEffect(() => {
+    try { saveCurrentTabSearch(); } catch {}
+  }, [query, page, results, imageResults, videoUrls, newsItems, products, resultsHistory, resultsIndex, forwardFromLobby, activeTab, hasNextPage, error, fromIncogResults, previewUrl, overlayIncognito, activeTabIdIncog, activeTabIdNormal]);
 
   // Run AI analysis (shared)
   // Helper: compress data URL image on client (max 1280px, q=0.82 by default)
@@ -947,30 +1524,58 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingSearch?.query]);
 
+  // Keep overlay chrome visible on desktop; do not auto-hide when a page opens
+  useEffect(() => {
+    if (!isMobile) {
+      setOverlayChromeHidden(false);
+    }
+  }, [overlayUrl, overlayIncognito, isMobile]);
+
+  const headerHeight = isMobile ? 0 : 110; // px
+  const showDesktopHeader = !isMobile && !overlayShellOpen; // hide header when WebView overlay is open
+  const isBusy = !!(loading || overlayLoading);
+  const mobileTabCount = overlayIncognito ? tabsIncog.length : tabsNormal.length;
+  const [mobileTabSearch, setMobileTabSearch] = useState('');
+  const [mobileTabOverflowOpen, setMobileTabOverflowOpen] = useState(false);
+
   return (
-    <div className="relative p-4 md:p-6 h-full text-text-main bg-bg-main/80 backdrop-blur-sm">
-      {/* Global top-left hamburger for Browser view */}
-      <div className="absolute left-2 top-2 z-30">
-        <div className="relative">
-          <button onClick={() => setPageMenuOpen(v => !v)} className="p-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/15 border border-white/15" aria-label="Menyu" title="Menyu">
-            <MenuIcon className="w-4 h-4" />
-          </button>
+    <div className={`relative ${ (overlayShellOpen || overlayUrl || overlayIncognito) ? 'p-0' : 'p-4 md:p-6' } min-h-full text-text-main bg-bg-main/80 ${ (overlayShellOpen || overlayUrl) ? '' : 'backdrop-blur-sm' }`} style={{ paddingTop: (!isMobile && showDesktopHeader) ? (headerHeight + 8) : undefined }}>
+      {isMobile && !(overlayShellOpen || overlayUrl) && (
+        <>
+          <div className="fixed top-2 left-2 z-[20000] pointer-events-auto">
+            <button
+              onClick={() => setPageMenuOpen(v => !v)}
+              aria-label="Menyu"
+              className="w-9 h-9 rounded-lg border border-white/20 bg-black/40 text-white/90 flex items-center justify-center backdrop-blur-md"
+            >
+              <MenuIcon className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="fixed top-2 right-2 z-[20000] pointer-events-auto">
+            <button
+              onClick={() => setShowTabSwitcher(true)}
+              aria-label="Tablar"
+              className="w-9 h-9 rounded-xl border border-white/25 bg-black/50 text-white/90 flex items-center justify-center font-semibold shadow-md backdrop-blur-md"
+            >
+              {Math.max(1, mobileTabCount || 0)}
+            </button>
+          </div>
           {pageMenuOpen && (
-            <div className="absolute left-0 top-full mt-2 bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl border border-white/20 py-2 min-w-[220px] z-[60] overflow-hidden">
-              <div className="absolute left-3 -top-1 w-3 h-3 rotate-45 bg-white/10 border-l border-t border-white/20"></div>
-              <button onClick={() => { dispatchNav('profile'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+            <div className="fixed top-12 left-2 z-[20010] min-w-[240px] rounded-2xl border border-white/20 bg-black/70 text-white/90 shadow-2xl backdrop-blur-md overflow-hidden">
+              <div className="absolute left-3 -top-1 w-3 h-3 rotate-45 bg-black/70 border-l border-t border-white/20"></div>
+              <button onClick={() => { dispatchNav('profile'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
                 <span>👤</span>
                 <span>Profil</span>
               </button>
-              <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch {} setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+              <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch {} setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
                 <span>🕶️</span>
                 <span>Anonim Tab</span>
               </button>
-              <button onClick={() => { dispatchNav('safe-search'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+              <button onClick={() => { dispatchNav('safe-search'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
                 <span>🛡️</span>
                 <span>SafeSearch</span>
               </button>
-              <button onClick={() => { dispatchNav('settings'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+              <button onClick={() => { dispatchNav('settings'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
                 <span>⚙️</span>
                 <span>Ayarlar</span>
               </button>
@@ -979,7 +1584,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 <span>Axtarış tarixçəsi</span>
                 <span className="px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/70">Saxlanılır</span>
               </div>
-              <button onClick={() => { clearSearchHistoryAll(); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+              <button onClick={() => { clearSearchHistoryAll(); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
                 <span>🗑️</span>
                 <span>Axtarışın hamısını sil</span>
               </button>
@@ -1005,12 +1610,308 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
               </div>
             </div>
           )}
+        </>
+      )}
+      {/* Global top-left hamburger (desktop header only) */}
+      {!isMobile && !(overlayShellOpen || overlayUrl) && (
+        <div className="fixed left-2 top-2 z-[20000]">
+          <div className="relative">
+            <button onClick={() => setPageMenuOpen(v => !v)} className="p-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/15 border border-white/15" aria-label="Menyu" title="Menyu">
+              <MenuIcon className="w-4 h-4" />
+            </button>
+            {pageMenuOpen && (
+              <div className="absolute left-0 top-full mt-2 bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl border border-white/20 py-2 min-w-[220px] z-[60] overflow-hidden">
+                <div className="absolute left-3 -top-1 w-3 h-3 rotate-45 bg-white/10 border-l border-t border-white/20"></div>
+                <button onClick={() => { dispatchNav('profile'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                  <span>👤</span>
+                  <span>Profil</span>
+                </button>
+                <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch {} setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                  <span>🕶️</span>
+                  <span>Anonim Tab</span>
+                </button>
+                <button onClick={() => { dispatchNav('safe-search'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                  <span>🛡️</span>
+                  <span>SafeSearch</span>
+                </button>
+                <button onClick={() => { dispatchNav('settings'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                  <span>⚙️</span>
+                  <span>Ayarlar</span>
+                </button>
+                <div className="my-1 h-px bg-white/10" />
+                <div className="px-4 py-2 text-xs text-white/70 flex items-center justify-between">
+                  <span>Axtarış tarixçəsi</span>
+                  <span className="px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/70">{overlayIncognito ? 'Saxlanmır' : 'Saxlanılır'}</span>
+                </div>
+                {!overlayIncognito && (
+                  <button onClick={() => { clearSearchHistoryAll(); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                    <span>🗑️</span>
+                    <span>Axtarışın hamısını sil</span>
+                  </button>
+                )}
+                <div className="my-1 h-px bg-white/10" />
+                <div className="px-4 py-3 flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full overflow-hidden bg-white/20 flex items-center justify-center text-white/80">
+                    {avatar ? <img src={avatar} alt="avatar" className="w-full h-full object-cover" /> : <span>🙂</span>}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs text-white/80 truncate">{authEmail || 'Hesab yoxdur'}</div>
+                    <button onClick={() => { dispatchNav('profile'); setPageMenuOpen(false); }} className="text-[11px] text-white/70 hover:text-white">Hesabı idarə et</button>
+                  </div>
+                </div>
+                <div className="my-1 h-px bg-white/10" />
+                <div className="px-4 py-2 text-xs text-white/70">Görünüş</div>
+                <div className="px-3 pb-2 flex items-center gap-2">
+                  {([ {id:'light',label:'Ağ rejim'}, {id:'dark',label:'Tünd rejim'}, {id:'system',label:'Sistem'} ] as const).map(opt => (
+                    <button key={opt.id}
+                      onClick={() => { setOverlayTheme(opt.id as any); }}
+                      className={`px-3 py-1.5 rounded-full text-xs border ${overlayTheme === opt.id ? 'bg-white/20 text-white border-white/40' : 'bg-white/5 text-white/80 hover:bg-white/10 border-white/20'}`}
+                    >{opt.label}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
+      {/* Desktop persistent header (omnibox + tabs), fixed at top */}
+      {showDesktopHeader && (
+        <div className="fixed left-0 right-0 top-0 z-[10000]">
+          <div className="px-3 md:px-6">
+            <div className="max-w-6xl mx-auto flex flex-col">
+              {/* Row 1: Tab strip (moved above omnibox) */}
+              <div className="order-1 mt-0 flex items-center gap-2 rounded-2xl backdrop-blur-2xl bg-white/8 border border-white/15 shadow-md px-2 py-1.5">
+                <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pr-2">
+                  {(() => { const list = overlayIncognito ? tabsIncog : tabsNormal; const activeId = overlayIncognito ? activeTabIdIncog : activeTabIdNormal; return list.map(t => { const active = t.id === activeId; const fav = t.url ? `https://www.google.com/s2/favicons?domain=${getHost(t.url)}&sz=32` : ''; return (
+                    <div key={t.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-t-xl border ${active ? 'bg-white/10 border-white/20' : 'bg-white/5 hover:bg-white/10 border-white/10'}`}>
+                      <button onClick={() => switchToTab(t.id)} className="flex items-center gap-2 min-w-0">
+                        {t.url ? (
+                          <img src={fav} className="w-4 h-4" />
+                        ) : (
+                          <div className="relative w-4 h-4 rounded-full bg-white/5 border border-white/15 flex items-center justify-center">
+                            {active && isBusy && (<div className="absolute inset-0 rounded-full border border-white/30 border-t-white animate-spin"></div>)}
+                            {overlayIncognito ? (
+                              <span className="text-[10px] leading-4 font-semibold text-white/90">🕶️</span>
+                            ) : (
+                              <span className="text-[10px] leading-4 font-semibold bg-gradient-to-r from-cyan-200 via-white to-white text-transparent bg-clip-text">N</span>
+                            )}
+                          </div>
+                        )}
+                        <span className="text-xs text-white/90 truncate max-w-[18ch]">{t.title || 'Yeni Tab'}</span>
+                      </button>
+                      <button onClick={() => closeTabById(t.id)} className="text-white/70 hover:text-white" title="Bağla"><CloseIcon className="w-3.5 h-3.5" /></button>
+                    </div>
+                  ); }); })()}
+                  <button onClick={openNewTabLocal} className="p-1.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/15" title="Yeni tab"><PlusIcon className="w-4 h-4 text-white/90" /></button>
+                </div>
+              </div>
+              {/* Row 2: Omnibox (moved below) */}
+              <div className="order-2 mt-2 flex items-center gap-2 rounded-2xl backdrop-blur-2xl bg-white/8 border border-white/15 shadow-md px-2 py-2">
+                <div className="flex items-center gap-1">
+                  {(() => {
+                    const backDisabled = overlayUrl ? (overlayIndex <= 0) : (!results.length);
+                    const forwardDisabled = overlayUrl ? (overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) : (!results.length ? !forwardFromLobby : (resultsIndex < 0 || resultsIndex >= resultsHistory.length - 1));
+                    return (
+                      <>
+                        <button
+                          onClick={handleGlobalBack}
+                          disabled={backDisabled}
+                          className={`p-2 rounded-lg border ${backDisabled ? 'bg-white/5 text-white/40 cursor-not-allowed border-white/10' : 'bg-white/10 text-white/80 hover:bg-white/15 border-white/15'}`}
+                          title="Geri"
+                        >
+                          <ArrowLeftIcon className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={handleGlobalForward}
+                          disabled={forwardDisabled}
+                          className={`p-2 rounded-lg border ${forwardDisabled ? 'bg-white/5 text-white/40 cursor-not-allowed border-white/10' : 'bg-white/10 text-white/80 hover:bg-white/15 border-white/15'}`}
+                          title="İrəli"
+                        >
+                          <ArrowRightIcon className="w-4 h-4" />
+                        </button>
+                        <button
+                          disabled={!overlayUrl}
+                          onClick={reloadOverlay}
+                          className={`p-2 rounded-lg border ${!overlayUrl ? 'bg-white/5 text-white/40 cursor-not-allowed border-white/10' : 'bg-white/10 text-white/80 hover:bg-white/15 border-white/15'}`}
+                          title="Yenilə"
+                        >
+                          <RefreshIcon className="w-4 h-4" />
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
+                <div className="flex-1 min-w-0 relative">
+                  <div className="flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-full bg-white/8 border border-white/15 backdrop-blur-xl ring-1 ring-white/10 shadow-[0_4px_16px_rgba(0,0,0,.25)]">
+                    <div className="relative w-7 h-7 rounded-full bg-white/10 border border-white/15 flex items-center justify-center font-semibold">
+                    {isBusy && (<div className="absolute inset-0 rounded-full border-2 border-white/25 border-t-white/80 animate-spin"></div>)}
+                    {overlayIncognito ? (
+                      <span className="text-white/90">🕶️</span>
+                    ) : (
+                      <span className="bg-gradient-to-r from-cyan-200 via-white to-white text-transparent bg-clip-text">N</span>
+                    )}
+                  </div>
+                    <input
+                      type="text"
+                      value={hbQuery}
+                      onChange={(e) => setHbQuery(e.target.value)}
+                      onFocus={() => setHbFocused(true)}
+                      onBlur={() => { window.setTimeout(() => setHbFocused(false), 120); }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          if (hbActiveIndex >= 0 && hbSuggestions[hbActiveIndex]) { submitHeader(hbSuggestions[hbActiveIndex]); }
+                          else { submitHeader(); }
+                          e.preventDefault();
+                          return;
+                        }
+                        if (e.key === 'ArrowDown' && hbSuggestions.length > 0) { e.preventDefault(); setHbActiveIndex((i) => (i + 1) % hbSuggestions.length); }
+                        else if (e.key === 'ArrowUp' && hbSuggestions.length > 0) { e.preventDefault(); setHbActiveIndex((i) => (i <= 0 ? hbSuggestions.length - 1 : i - 1)); }
+                        else if (e.key === 'Escape') { setHbSuggestions([]); setHbActiveIndex(-1); }
+                      }}
+                      placeholder="Axtar..."
+                      className="flex-1 min-w-0 bg-transparent outline-none text-base md:text-lg text-white/90 placeholder-white/70 px-1.5 py-2"
+                    />
+                    <div className="ml-auto flex items-center gap-1.5">
+                      {hbQuery.trim().length > 0 && (
+                        <button
+                          onClick={() => { setHbQuery(''); setHbSuggestions([]); setHbActiveIndex(-1); }}
+                          className="p-1.5 rounded-md bg-white/5 hover:bg-white/10 text-white/80 hover:text-white border border-white/15"
+                          title="Təmizlə"
+                          aria-label="Təmizlə"
+                        >
+                          <CloseIcon className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => { if (hbQuery.trim().length > 0) submitHeader(); }}
+                        disabled={hbQuery.trim().length === 0}
+                        className={`w-9 h-9 rounded-full flex items-center justify-center border ring-1 ${hbQuery.trim().length === 0 ? 'bg-white/5 text-white/40 cursor-not-allowed border-white/10 ring-white/5' : 'bg-white/10 text-white/90 hover:bg-white/15 border-white/25 ring-white/10'}`}
+                        title="Axtar"
+                        aria-label="Axtar"
+                      >
+                        <SearchIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  {(hbFocused && hbSuggestions.length > 0) && (
+                    <div className="absolute top-[calc(100%+0.5rem)] left-0 right-0 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 shadow-2xl ring-1 ring-black/10 z-40 overflow-auto max-h-[60vh]">
+                      {hbSuggestions.map((sug, idx) => {
+                        const isActive = idx === hbActiveIndex;
+                        const isHistory = hbQuery.trim().length < 2 && hbHistory.some(h => h === sug);
+                        return (
+                          <div key={sug} className={`w-full flex items-center gap-2 px-2 ${isActive ? 'bg-accent/20' : 'hover:bg-white/15'} transition-colors`}>
+                            <button
+                              onMouseDown={(e) => { e.preventDefault(); }}
+                              onClick={() => submitHeader(sug)}
+                              className={`flex-1 text-left px-2 py-3 text-sm truncate ${isActive ? 'text-white' : 'text-white/90'}`}
+                              title={sug}
+                            >
+                              {sug}
+                            </button>
+                            {isHistory && (
+                              <button
+                                onMouseDown={(e) => { e.preventDefault(); }}
+                                onClick={(e) => { e.stopPropagation(); setHbHistory(prev => { const next = prev.filter(p => p.toLowerCase() !== sug.toLowerCase()); try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch {} return next; }); setHbSuggestions(prev => prev.filter(p => p !== sug)); setHbActiveIndex(-1); }}
+                                className="ml-auto my-1 px-2 py-1 rounded-md text-xs text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/15"
+                                title="Sətiri sil"
+                                aria-label="Sətiri sil"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {/* Local thin scrollbar style */}
+                  <style>
+                    {`.no-scrollbar::-webkit-scrollbar{display:none}`}
+                  </style>
+                </div>
+              </div>
+              {/* (Tab strip moved above) */}
+            </div>
+          </div>
+        </div>
+      )}
+      {isMobile && showTabSwitcher && (
+        <div className={`fixed inset-0 z-[21000] bg-black text-white flex flex-col transition-opacity duration-200 ease-out opacity-100`}>
+          <div className="relative px-3 pt-[env(safe-area-inset-top)] pb-2 flex items-center justify-center">
+            <div className={`inline-flex items-center gap-2 px-1.5 py-1 rounded-full shadow-xl ring-1 bg-white/5 border border-white/15 ring-black/20`}>
+              <button onClick={() => { openNewTabLocal(); setShowTabSwitcher(false); }} className={`w-9 h-9 rounded-full flex items-center justify-center active:scale-95 transition-transform bg-white/10 hover:bg-white/15 border border-white/20`}>
+                <PlusIcon className="w-5 h-5" />
+              </button>
+              <div className={`w-10 h-9 rounded-lg flex items-center justify-center text-sm font-semibold bg-white/10 border border-white/20`}>
+                {Math.max(1, mobileTabCount || 0)}
+              </div>
+              <button onClick={() => setMobileTabOverflowOpen(v => !v)} className={`w-9 h-9 rounded-full flex items-center justify-center active:scale-95 transition-transform bg-white/10 hover:bg-white/15 border border-white/20`} aria-label="Menyu">
+                <MenuIcon className="w-5 h-5" />
+              </button>
+            </div>
+            {mobileTabOverflowOpen && (
+              <div className={`fixed right-3 top-[calc(env(safe-area-inset-top)+52px)] z-[21010] min-w-[200px] rounded-2xl overflow-hidden shadow-2xl bg-black/90 border border-white/20 text-white`}>
+                <button onClick={() => { setOverlayIncognito(true); setTabsIncog(prev => { if (prev.length) return prev; const nt = makeNewTab(null); setActiveTabIdIncog(nt.id); return [nt]; }); setMobileTabOverflowOpen(false); setShowTabSwitcher(true); }} className={`w-full text-left px-4 py-3 text-sm hover:bg-white/10`}>Anonim Tab</button>
+                <button onClick={() => { dispatchNav('settings'); setMobileTabOverflowOpen(false); }} className={`w-full text-left px-4 py-3 text-sm hover:bg-white/10`}>Ayarlar</button>
+                <button onClick={() => { dispatchNav('safe-search'); setMobileTabOverflowOpen(false); }} className={`w-full text-left px-4 py-3 text-sm hover:bg-white/10`}>SafeSearch</button>
+                <button onClick={() => { setShowTabSwitcher(false); setMobileTabOverflowOpen(false); }} className={`w-full text-left px-4 py-3 text-sm hover:bg-white/10`}>Bağla</button>
+              </div>
+            )}
+            <button
+              onClick={() => setShowTabSwitcher(false)}
+              className={`absolute right-3 top-2 z-[21005] w-9 h-9 rounded-full flex items-center justify-center bg-white/10 hover:bg-white/15 border border-white/20`}
+              aria-label="Bağla"
+              title="Bağla"
+            >
+              <CloseIcon className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="px-3 pb-2">
+            <input value={mobileTabSearch} onChange={(e)=>setMobileTabSearch(e.target.value)} placeholder="Tabları axtarın" className={`w-full px-4 py-2 rounded-full outline-none bg-black/40 border border-white/15 placeholder-white/60`} />
+          </div>
+          <div className="flex-1 overflow-auto px-3 pb-6">
+            {(() => {
+              const list = overlayIncognito ? tabsIncog : tabsNormal;
+              const q = mobileTabSearch.trim().toLowerCase();
+              const filtered = q ? list.filter(t => (t.title||'').toLowerCase().includes(q) || (t.url||'').toLowerCase().includes(q)) : list;
+              if (!filtered.length) return (<div className="text-center text-white/60 mt-10">Heç bir tab yoxdur</div>);
+              return (
+                <div className="grid grid-cols-2 gap-3">
+                  {filtered.map(t => {
+                    const active = (overlayIncognito ? activeTabIdIncog : activeTabIdNormal) === t.id;
+                    return (
+                      <div key={t.id} className={`group relative rounded-2xl border overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,.25)] transition-transform duration-200 ease-out active:scale-95 ${active ? 'border-accent/60 bg-white/10' : 'border-white/15 bg-white/5'}`}
+                            onClick={() => { switchToTab(t.id); setShowTabSwitcher(false); }}>
+                        <div className={`relative w-full pt-[66%] bg-black/40`}>
+                          <div className={`absolute inset-0 flex items-center justify-center text-xl font-semibold text-white/70`}>
+                            {t.url ? new URL(t.url).hostname.replace(/^www\./,'').slice(0,2).toUpperCase() : (overlayIncognito ? '🕶️' : 'N')}
+                          </div>
+                          <button onClick={(e) => { e.stopPropagation(); closeTabById(t.id); }} className={`absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center opacity-90 hover:opacity-100 bg-black/60 text-white/90 border border-white/20`}>
+                            <CloseIcon className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="p-2">
+                          <div className={`text-sm font-medium truncate text-white`}>{t.title || 'Yeni Tab'}</div>
+                          <div className={`text-xs truncate text-white/60`}>{t.url || 'Lobby'}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* Hero center before first search */}
       {!hasAnyResults && !loading ? (
-        <div className="h-full flex flex-col items-center justify-center text-center px-4">
-          <Logo isLarge={true} />
+        <div className="relative h-full flex flex-col items-center justify-center text-center px-4">
+          {overlayIncognito ? (
+            <div className="w-20 h-20 rounded-full bg-white/10 border border-white/15 flex items-center justify-center text-3xl text-white/90">🕶️</div>
+          ) : (
+            <Logo isLarge={true} />
+          )}
           <div className="w-full max-w-3xl mx-auto mt-6">
             <HeroSearchBar
               onSend={async (q) => {
@@ -1033,10 +1934,15 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
               }}
               isLoading={loading}
               onVoiceClick={() => {}}
-              placeholder="Vebdə axtarın..."
+              placeholder={overlayIncognito ? "Anonim rejimdə axtarın..." : "Vebdə axtarın..."}
               enableEmptySubmit={pendingImages.length > 0}
               onImageSelected={(imgs) => setPendingImages(prev => [...prev, ...imgs])}
             />
+            {overlayIncognito && (
+              <p className="mt-3 text-center text-[13px] text-white/60">
+                NovEra Brauzer bu rejimdə axtarışlarınızı saxlamır.
+              </p>
+            )}
             {pendingImages.length > 0 && (
               <div className="mt-3 flex items-center gap-2 justify-center">
                 {pendingImages.slice(0,3).map((src, i) => (
@@ -1054,23 +1960,28 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 <button onClick={() => setPendingImages([])} className="px-2 py-1 text-xs rounded-md bg-white/10 hover:bg-white/15 border border-white/20 text-white/80">Hamısını sil</button>
               </div>
             )}
-            <p className="mt-6 text-xl font-semibold text-text-main">Bu gün sizə NovEra Brauzer necə kömək edə bilər?</p>
+            {!overlayIncognito && (<p className="mt-6 text-xl font-semibold text-text-main">Bu gün sizə NovEra Brauzer necə kömək edə bilər?</p>)}
           </div>
         </div>
       ) : (
-        <>
-        {/* Sticky mini search on results */}
+        <div>
+        {/* Sticky mini nav on results (mobile only): only logo + back/forward */}
+        {isMobile && (
         <div className="sticky top-0 z-20 bg-bg-main/95 backdrop-blur border-b border-white/10 -mx-4 md:-mx-6 px-4 md:px-6 py-2">
-          <div className="w-full max-w-5xl mx-auto flex items-center gap-2 sm:gap-3 flex-wrap">
+          <div className="w-full max-w-5xl mx-auto flex items-center gap-2">
             {/* Small clickable logo: Incognito results -> go incognito home; otherwise -> go lobby */}
             <button
               onClick={() => {
                 if (fromIncogResults) openIncognitoHome(); else clearAll();
               }}
-              className={`flex items-center gap-2 p-1 rounded-lg ${fromIncogResults ? 'hover:bg-white/10' : 'hover:bg-white/10'}`}
+              className={`flex items-center gap-2 p-1 rounded-lg hover:bg-white/10`}
               title={fromIncogResults ? 'Anonim Tab' : 'Əsas səhifə'}
             >
-              <Logo isLarge={false} />
+              {overlayIncognito ? (
+                <div className="w-6 h-6 rounded-full bg-white/10 border border-white/15 flex items-center justify-center">🕶️</div>
+              ) : (
+                <Logo isLarge={false} />
+              )}
             </button>
             {/* Back/Forward global */}
             <div className="flex items-center gap-2">
@@ -1099,7 +2010,13 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 );
               })()}
             </div>
-            <div className="flex-1 min-w-[160px] sm:min-w-[220px]">
+          </div>
+        </div>
+        )}
+        {/* Re-search bar (mobile only): placed under nav and above categories */}
+        {isMobile && (
+          <div className="-mx-4 md:-mx-6 px-4 md:px-6 py-2">
+            <div className="w-full max-w-5xl mx-auto">
               <HeroSearchBar
                 onSend={async (q) => {
                   const imgs = pendingImages;
@@ -1121,34 +2038,33 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 }}
                 isLoading={loading}
                 onVoiceClick={() => {}}
-                placeholder="Vebdə axtarın..."
+                placeholder={(fromIncogResults || overlayIncognito) ? 'Anonim rejimdə axtarın...' : 'Vebdə axtarın...'}
                 enableEmptySubmit={pendingImages.length > 0}
                 onImageSelected={(imgs) => setPendingImages(prev => [...prev, ...imgs])}
               />
+              {pendingImages.length > 0 && (
+                <div className="mt-2 flex items-center gap-2">
+                  {pendingImages.slice(0,2).map((src, i) => (
+                    <div key={i} className="relative group">
+                      <img src={src} alt="seçilmiş" className="w-8 h-8 rounded-md border border-white/20 object-cover" />
+                      <button
+                        onClick={() => removePendingAt(i)}
+                        className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-black/70 text-white/90 text-[9px] leading-3.5 flex items-center justify-center border border-white/30 opacity-80 group-hover:opacity-100"
+                        title="Sil"
+                        aria-label="Şəkli sil"
+                        type="button"
+                      ></button>
+                    </div>
+                  ))}
+                  <button onClick={() => setPendingImages([])} className="px-2 py-1 text-[11px] rounded-md bg-white/10 hover:bg-white/15 border border-white/20 text-white/80">Hamısını sil</button>
+                </div>
+              )}
             </div>
-            {pendingImages.length > 0 && (
-              <div className="flex items-center gap-2">
-                {pendingImages.slice(0,2).map((src, i) => (
-                  <div key={i} className="relative group">
-                    <img src={src} alt="seçilmiş" className="w-8 h-8 rounded-md border border-white/20 object-cover" />
-                    <button
-                      onClick={() => removePendingAt(i)}
-                      className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-black/70 text-white/90 text-[9px] leading-3.5 flex items-center justify-center border border-white/30 opacity-80 group-hover:opacity-100"
-                      title="Sil"
-                      aria-label="Şəkli sil"
-                      type="button"
-                    ></button>
-                  </div>
-                ))}
-                <button onClick={() => setPendingImages([])} className="px-2 py-1 text-[11px] rounded-md bg-white/10 hover:bg-white/15 border border-white/20 text-white/80">Hamısını sil</button>
-              </div>
-            )}
           </div>
-        </div>
-
-        <div className="grid gap-4 h-full overflow-hidden grid-cols-1">
+        )}
+        <div className="grid gap-4 grid-cols-1">
         {/* Results list */}
-        <div className="overflow-y-auto pr-2 pb-24 browser-scroll">
+        <div className="pr-2 pb-24">
           {/* Tabs: Web / Images / Videos / News / Shopping */}
           <div className="flex gap-2 mb-3 sticky top-0 bg-bg-main/95 backdrop-blur z-10 p-2 rounded-lg border border-white/10 overflow-x-auto no-scrollbar scroll-touch whitespace-nowrap">
             {(
@@ -1194,7 +2110,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 </button>
                 {/* N avatar */}
 
-                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent/40 to-accent/10 border border-accent/40 text-[11px] font-semibold flex items-center justify-center text-white/90">N</div>
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent/40 to-accent/10 border border-accent/40 text-[11px] font-semibold flex items-center justify-center text-white/90">{overlayIncognito ? '🕶️' : 'N'}</div>
               </div>
             </div>
             <div className={`grid transition-all duration-300 ${aiExpanded ? 'grid-rows-[1fr] mt-3' : 'grid-rows-[0fr]'} overflow-hidden`}>
@@ -1361,7 +2277,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
           ) : activeTab === 'images' ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
               {imageResults.map((img, idx) => {
-                const href = img.image.contextLink;
+                const href = img.link || img.image.contextLink;
                 let domain = '';
                 try { domain = new URL(href).hostname.replace(/^www\./,''); } catch {}
                 return (
@@ -1437,43 +2353,65 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
 
         {/* No side preview; pages open in full overlay or new tab */}
       </div>
-      </>
+      </div>
       )}
 
-      {/* Full-screen web overlay */}
-      {(overlayUrl || overlayIncognito) && (
-        <div ref={overlayContainerRef} className="fixed inset-0 z-[9999] flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]" style={{ colorScheme: (isLightOverlay ? 'light' : 'dark') as any }}>
-          <div className={`absolute inset-0 ${isLightOverlay ? 'bg-white/80' : 'bg-black/80'}`} />
-          <div className="relative z-50 h-full w-full flex flex-col">{overlayChromeHidden && (<div className="absolute top-2 right-2 z-[60]"><button onClick={() => setOverlayChromeHidden(false)} className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/15 text-white text-xs border border-white/20">Paneli göstər</button></div>)}
-            <div className="flex items-center gap-2 px-2 py-1.5 md:px-3 md:py-2 bg-white/10 backdrop-blur border-b border-white/15" style={{ display: overlayChromeHidden ? "none" : undefined }}>
+      {/* Full-screen web overlay (kept mounted; hidden when closed) */}
+      {typeof document !== 'undefined' && createPortal(
+        <div ref={overlayContainerRef} className={`fixed inset-0 z-[10050] flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] overflow-hidden overscroll-none transition-opacity duration-200 ${ overlayShellOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none' }`} style={{ top: 0 as any, colorScheme: (isLightOverlay ? 'light' : 'dark') as any }}>
+          <div className={`absolute inset-0 ${isLightOverlay ? 'bg-white' : 'bg-black'}`} />
+          <div className="relative z-50 h-full w-full flex flex-col">{overlayChromeHidden && (<div className="absolute top-2 right-2 z-[60]"><button onClick={() => setOverlayChromeHidden(false)} className={`px-2 py-1 rounded-md text-xs border ${isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black border-black/20' : 'bg-white/10 hover:bg-white/15 text-white border-white/20'}`}>Paneli göstər</button></div>)}
+            {isMobile && !overlayChromeHidden && (
+              <button
+                onClick={closeOverlay}
+                className={`absolute right-2 top-[calc(env(safe-area-inset-top)+6px)] z-[70] w-9 h-9 rounded-full flex items-center justify-center ${isLightOverlay ? 'bg-black/10 text-black hover:bg-black/15 border border-black/20' : 'bg-white/10 text-white hover:bg-white/15 border border-white/20'}`}
+                aria-label="Bağla"
+                title="Bağla"
+              >
+                <CloseIcon className="w-5 h-5" />
+              </button>
+            )}
+            {!overlayUrl && !overlayIncognito && (
+              <div className="absolute inset-0 pointer-events-none select-none" aria-hidden="true">
+                <div className="absolute left-8 top-10">
+                  <span
+                    className={`block leading-none font-extrabold ${isLightOverlay ? 'opacity-[0.08]' : 'opacity-[0.12]'} bg-gradient-to-r from-blue-300 via-white to-white text-transparent bg-clip-text`}
+                    style={{ fontSize: 'min(42vw, 24rem)' }}
+                  >
+                    N
+                  </span>
+                </div>
+              </div>
+            )}
+            <div className={`flex items-center gap-2 px-2 py-1.5 md:px-3 md:py-2 backdrop-blur-2xl rounded-2xl mx-2 mb-2 border shadow-[0_10px_30px_rgba(0,0,0,.25)] ring-1 ${isLightOverlay ? 'bg-black/10 border-black/15 ring-black/20' : 'bg-white/10 border-white/15 ring-white/20'}`} style={{ display: (overlayChromeHidden || isMobile) ? "none" : undefined }}>
               {/* Left: Hamburger menu for overlay (incognito only) */}
-              {overlayIncognito && (
+              {false && overlayIncognito && (
                 <div className="relative">
-                  <button onClick={() => setOverlayMenuOpen(v => !v)} className="p-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/15" aria-label="Menyu" title="Menyu">
+                  <button onClick={() => setOverlayMenuOpen(v => !v)} className={`p-2 rounded-lg ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'}`} aria-label="Menyu" title="Menyu">
                     <MenuIcon className="w-4 h-4" />
                   </button>
                   {overlayMenuOpen && (
-                    <div className="absolute left-0 top-full mt-2 bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl border border-white/20 py-2 min-w-[240px] z-[70] overflow-hidden">
-                      <div className="absolute left-4 -top-1 w-3 h-3 rotate-45 bg-white/10 border-l border-t border-white/20"></div>
-                      <button onClick={() => { setOverlayIncognito(false); closeOverlay(); setOverlayMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                    <div className={`absolute left-0 top-full mt-2 backdrop-blur-md rounded-2xl shadow-2xl py-2 min-w-[240px] z-[70] overflow-hidden ${isLightOverlay ? 'bg-black/5 border border-black/20' : 'bg-white/10 border border-white/20'}`}>
+                      <div className={`absolute left-4 -top-1 w-3 h-3 rotate-45 ${isLightOverlay ? 'bg-black/5 border-l border-t border-black/20' : 'bg-white/10 border-l border-t border-white/20'}`}></div>
+                      <button onClick={() => { setOverlayIncognito(false); closeOverlay(); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/10' : 'text-white/90 hover:bg-white/15'}`}>
                         <span>⬅️</span>
                         <span>Brauzerə Geri Qayıt</span>
                       </button>
-                      <button onClick={() => { dispatchNav('profile'); setOverlayMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                      <button onClick={() => { dispatchNav('profile'); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/10' : 'text-white/90 hover:bg-white/15'}`}>
                         <span>👤</span>
                         <span>Profil</span>
                       </button>
-                      <button onClick={() => { dispatchNav('safe-search'); setOverlayMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                      <button onClick={() => { dispatchNav('safe-search'); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/10' : 'text-white/90 hover:bg-white/15'}`}>
                         <span>🛡️</span>
                         <span>SafeSearch</span>
                       </button>
-                      <button onClick={() => { dispatchNav('settings'); setOverlayMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                      <button onClick={() => { dispatchNav('settings'); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/10' : 'text-white/90 hover:bg-white/15'}`}>
                         <span>⚙️</span>
                         <span>Ayarlar</span>
                       </button>
-                      <div className="my-1 h-px bg-white/10" />
+                      <div className={`my-1 h-px ${isLightOverlay ? 'bg-black/10' : 'bg-white/10'}`} />
                       {/* Theme selector for incognito overlay */}
-                      <div className="px-4 py-2 text-xs text-white/70">Görünüş</div>
+                      <div className={`px-4 py-2 text-xs ${isLightOverlay ? 'text-black/70' : 'text-white/70'}`}>Görünüş</div>
                       <div className="px-3 pb-3 flex items-center gap-2">
                         {([
                           { id: 'light', label: 'Ağ rejim' },
@@ -1482,7 +2420,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                         ] as const).map(opt => (
                           <button key={opt.id}
                             onClick={() => setOverlayTheme(opt.id as any)}
-                            className={`px-3 py-1.5 rounded-full text-xs border ${overlayTheme === opt.id ? 'bg-white/20 text-white border-white/40' : 'bg-white/5 text-white/80 hover:bg-white/10 border-white/20'}`}
+                            className={`px-3 py-1.5 rounded-full text-xs border ${isLightOverlay ? (overlayTheme === opt.id ? 'bg-black/20 text-black border-black/40' : 'bg-black/5 text-black/80 hover:bg-black/10 border-black/20') : (overlayTheme === opt.id ? 'bg-white/20 text-white border-white/40' : 'bg-white/5 text-white/80 hover:bg-white/10 border-white/20')}`}
                           >{opt.label}</button>
                         ))}
                       </div>
@@ -1490,43 +2428,49 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                   )}
                 </div>
               )}
-
               {/* Nav */}
-              <div className="flex items-center gap-3">
-                {overlayIncognito ? (
-                  <div className="flex items-center gap-2 pr-3 mr-1 border-r border-white/10">
-                    <div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-white">🕶️</div>
-                    <div className="leading-none">
-                      <div className="text-sm text-white font-semibold">Anonim Tab</div>
-                    </div>
+              <div className="flex items-center gap-2">
+                <div className={`flex items-center gap-2 pr-3 mr-1 border-r ${isLightOverlay ? 'border-black/10' : 'border-white/10'}`}>
+                  <Logo className={`${isLightOverlay ? 'text-black' : 'text-white'} text-base md:text-xl`} />
+                  <div className="leading-none">
+                    <div className={`text-[10px] md:text-[11px] -mt-[1px] ${isLightOverlay ? 'text-black/70' : 'text-white/70'}`}>NovEra Brauzer</div>
                   </div>
-                ) : (
-                  <div className="flex items-center gap-2 pr-3 mr-1 border-r border-white/10">
-                    <Logo className="text-white text-xl" />
-                    <div className="leading-none">
-                      <div className="text-[10px] text-white/70 -mt-[2px]">NovEra Brauzer</div>
-                    </div>
-                  </div>
-                )}
-                <button onClick={goBack} disabled={overlayIndex <= 0} title="Geri" className={`p-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/15 ${overlayIndex <= 0 ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                  {overlayIncognito && (
+                    <div className="ml-2 w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-white/90">🕶️</div>
+                  )}
+                </div>
+                <button onClick={goBack} disabled={overlayIndex <= 0} title="Geri" className={`p-2 rounded-lg ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'} ${overlayIndex <= 0 ? 'opacity-40 cursor-not-allowed' : ''}`}>
                   <ArrowLeftIcon className="w-4 h-4" />
                 </button>
-                <button onClick={goForward} disabled={overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1} title="İrəli" className={`p-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/15 ${(overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                <button onClick={goForward} disabled={overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1} title="İrəli" className={`p-2 rounded-lg ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'} ${(overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) ? 'opacity-40 cursor-not-allowed' : ''}`}>
                   <ArrowRightIcon className="w-4 h-4" />
                 </button>
-                <button onClick={reloadOverlay} title="Yenilə" className="p-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/15">
+                <button onClick={reloadOverlay} title="Yenilə" className={`p-2 rounded-lg ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'}`}>
                   <RefreshIcon className="w-4 h-4" />
                 </button>
               </div>
-              {/* URL + Search (hidden in Incognito for cleaner look) */}
-              {!overlayIncognito && (
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                  {overlayUrl ? (
-                    <>
-                      <img src={`https://www.google.com/s2/favicons?domain=${(() => { try { return new URL(overlayUrl).hostname; } catch { return 'nov-era.app'; } })()}&sz=32`} className="w-4 h-4" />
-                      <span className="text-xs text-white/80 truncate max-w-[24vw] hidden md:block">{overlayUrl}</span>
-                    </>
-                  ) : null}
+              {/* URL + Search (always visible on overlay) */}
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                {overlayLoading ? (
+                  <div className={`relative w-7 h-7 rounded-full flex items-center justify-center font-extrabold ${isLightOverlay ? 'bg-black/10 border border-black/20' : 'bg-white/10 border border-white/20'}`}>
+                    <div className="absolute inset-0 rounded-full border-2 border-white/25 border-t-white/80 animate-spin"></div>
+                    <span className="text-[14px] bg-gradient-to-r from-blue-300 via-white to-white text-transparent bg-clip-text">N</span>
+                  </div>
+                ) : overlayUrl ? (
+                  <>
+                    <img src={`https://www.google.com/s2/favicons?domain=${(() => { try { return new URL(overlayUrl).hostname; } catch { return 'nov-era.app'; } })()}&sz=32`} className="w-4 h-4" />
+                    <button
+                      onClick={() => { try { navigator.clipboard.writeText(overlayUrl!); } catch {} }}
+                      title="URL-i kopyala"
+                      className={`hidden md:inline-flex items-center px-2 py-1 rounded-md text-[11px] border ${isLightOverlay ? 'bg-white/60 text-black/80 border-black/20 hover:bg-white/75' : 'bg-black/40 text-white/80 border-white/20 hover:bg-black/55'}`}
+                    >{(() => { try { return new URL(overlayUrl!).hostname.replace(/^www\./,''); } catch { return 'link'; } })()}</button>
+                  </>
+                ) : (!isMobile ? (
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center font-extrabold ${isLightOverlay ? 'bg-black/10' : 'bg-white/10'}`}>
+                    <span className="text-[14px] bg-gradient-to-r from-blue-300 via-white to-white text-transparent bg-clip-text">N</span>
+                  </div>
+                ) : null)}
+                {!overlayUrl && (
                   <input
                     type="text"
                     value={overlaySearch}
@@ -1540,39 +2484,106 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                       }
                     }}
                     placeholder="Axtar..."
-                    className="flex-1 min-w-0 text-base px-4 py-2 rounded-full bg-black/60 text-white placeholder-white/70 border border-white/20 focus:outline-none focus:ring-2 focus:ring-accent/70"
+                    className={`flex-1 min-w-0 text-lg md:text-xl px-5 py-3 rounded-full focus:outline-none focus:ring-2 focus:ring-accent/70 border shadow-[inset_0_0_0_1px_rgba(255,255,255,.06)] ${isLightOverlay ? 'bg-white/80 text-black placeholder-black/60 border-black/20' : 'bg-black/45 text-white placeholder-white/70 border-white/20'} backdrop-blur-xl`}
                   />
-                  <button onClick={() => {
-                    const v = (overlaySearch || '').trim();
-                    if (!v) return;
-                    if (isProbablyUrl(v)) { navigateOverlay(normalizeUrl(v)); setOverlaySearch(''); return; }
-                    closeOverlay(); doSearch(1, v);
-                  }} className="px-3 md:px-4 py-2 rounded-full bg-accent/50 text-white hover:bg-accent/60 text-sm">Axtar</button>
-                </div>
-              )}
+                )}
+              </div>
               {/* Actions (simplified in Incognito) */}
               <div className="flex items-center gap-2">
-                <button onClick={toggleFullscreen} className="p-2 rounded-lg bg-white/10 hover:bg-white/15 text-white/80 border border-white/20" title={isFullscreenActive ? 'Tam ekrandan çıx' : 'Tam ekran'}>
+                <button onClick={openHeaderNewTabFromOverlay} className={`p-2 rounded-lg border ${isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black/80 border-black/20' : 'bg-white/10 hover:bg-white/15 text-white/80 border-white/20'}`} title="Yeni tab">
+                  <PlusIcon className="w-4 h-4" />
+                </button>
+                <button onClick={toggleFullscreen} className={`p-2 rounded-lg border ${isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black/80 border-black/20' : 'bg-white/10 hover:bg-white/15 text-white/80 border-white/20'}`} title={isFullscreenActive ? 'Tam ekrandan çıx' : 'Tam ekran'}>
                   {isFullscreenActive ? <MinimizeIcon className="w-4 h-4" /> : <MaximizeIcon className="w-4 h-4" />}
                 </button>
-                {!overlayIncognito && (
+                {overlayUrl && (
                   <>
                     <button
                       onClick={() => setOverlayOpenMode('original')}
-                      className={`inline-flex text-xs px-3 py-1 rounded-lg transition-colors ${overlayOpenMode === 'original' ? 'bg-accent/40 text-white' : 'bg-white/10 hover:bg-white/15 text-white/80'} border border-white/20`}
+                      className={`inline-flex text-xs px-3 py-1 rounded-lg transition-colors border ${overlayOpenMode === 'original' ? 'bg-accent/40 text-white border-accent/40' : (isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black/80 border-black/20' : 'bg-white/10 hover:bg-white/15 text-white/80 border-white/20')}`}
                     >{overlayOpenMode === 'original' ? '✓ iframe' : 'iframe'}</button>
                     <button
                       onClick={() => setOverlayOpenMode('proxy')}
-                      className={`inline-flex text-xs px-3 py-1 rounded-lg transition-colors ${overlayOpenMode === 'proxy' ? 'bg-accent/40 text-white' : 'bg-white/10 hover:bg-white/15 text-white/80'} border border-white/20`}
-                    >{overlayOpenMode === 'proxy' ? '✓ orginal' : 'orginal'}</button>
-                    <a href={overlayUrl} target="_blank" rel="noopener noreferrer" className="hidden sm:inline-flex text-xs px-3 py-1 bg-accent/30 text-white rounded-lg hover:bg-accent/40 transition-colors">Yeni pəncərədə aç ↗</a>
+                      className={`inline-flex text-xs px-3 py-1 rounded-lg transition-colors border ${overlayOpenMode === 'proxy' ? 'bg-accent/40 text-white border-accent/40' : (isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black/80 border-black/20' : 'bg-white/10 hover:bg-white/15 text-white/80 border-white/20')}`}
+                    >{overlayOpenMode === 'proxy' ? '✓ original' : 'original'}</button>
                   </>
                 )}
-                <button onClick={closeOverlay} className="p-1.5 rounded-lg hover:bg-white/10 text-white/80" title="Bağla">
+                {overlayUrl && (
+                  <a href={overlayUrl} target="_blank" rel="noopener noreferrer" className={`hidden sm:inline-flex text-xs px-3 py-1 rounded-lg transition-colors ml-auto ${isLightOverlay ? 'bg-black/10 text-black hover:bg-black/15' : 'bg-accent/30 text-white hover:bg-accent/40'}`}>Yeni pəncərədə aç ↗</a>
+                )}
+                <button onClick={closeOverlay} className={`p-1.5 rounded-lg ${isLightOverlay ? 'hover:bg-black/10 text-black/80' : 'hover:bg-white/10 text-white/80'}`} title="Bağla">
                   <CloseIcon className="w-5 h-5" />
                 </button>
               </div>
             </div>
+            {/* Desktop: Tab strip disabled for overlay; tabs live only on home header */}
+            {false && !isMobile && (
+              <div className={`px-2 py-1 overflow-x-auto no-scrollbar ${isLightOverlay ? 'bg-black/5' : 'bg-white/5'}`} style={{ display: overlayChromeHidden ? 'none' : undefined }}>
+                <div className="flex items-center gap-1">
+                  { (overlayIncognito ? tabsIncog : tabsNormal).map((t) => {
+                    const isActive = (overlayIncognito ? activeTabIdIncog : activeTabIdNormal) === t.id;
+                    const host = t.url ? (()=>{ try { return new URL(t.url!).hostname; } catch { return 'nov-era.app'; } })() : '';
+                    const fav = t.url ? `https://www.google.com/s2/favicons?domain=${host}&sz=32` : '';
+                    return (
+                      <div key={t.id} className={`group flex items-center gap-2 rounded-t-lg px-3 py-1.5 border ${isActive ? (isLightOverlay ? 'bg-black/15 border-black/25' : 'bg-white/15 border-white/25') : (isLightOverlay ? 'bg-black/5 border-black/15 hover:bg-black/10' : 'bg-white/5 border-white/15 hover:bg-white/10')}`}>
+                        <button onClick={() => switchToTab(t.id)} className="flex items-center gap-2 min-w-0">
+                          {t.url ? (<img src={fav} className="w-4 h-4" />) : (<div className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-semibold ${isLightOverlay ? 'bg-black/20 text-black' : 'bg-white/20 text-white'}`}>N</div>)}
+                          <span className={`text-xs truncate max-w-[22ch] ${isLightOverlay ? 'text-black/80' : 'text-white/80'}`}>{t.url ? (t.title || 'Tab') : 'Yeni Tab'}</span>
+                        </button>
+                        <button onClick={() => closeTabById(t.id)} className={`opacity-70 hover:opacity-100 ${isLightOverlay ? 'text-black/60 hover:text-black' : 'text-white/60 hover:text-white'}`} title="Bağla">×</button>
+                      </div>
+                    );
+                  })}
+                  <button onClick={openHeaderNewTabFromOverlay} className={`ml-1 px-2 py-1 rounded-md border ${isLightOverlay ? 'bg-black/5 hover:bg-black/10 text-black/80 border-black/15' : 'bg-white/5 hover:bg-white/10 text-white/80 border-white/15'}`} title="Yeni tab">+</button>
+                </div>
+              </div>
+            )}
+            {/* Mobile overlay controls (modern, 2-row) */}
+            {isMobile && (
+              <div className={`relative z-[60] flex flex-col gap-2 px-3 pr-16 py-2 ${isLightOverlay ? 'bg-black/5' : 'bg-white/5'} pointer-events-auto`} style={{ display: overlayChromeHidden ? 'none' : undefined }}>
+                {/* Row 1: brand + nav + tab counter + mode + close */}
+                <div className="flex items-center flex-nowrap gap-1.5 pointer-events-auto w-full">
+                  <Logo className={`${isLightOverlay ? 'text-black' : 'text-white'} text-base`} />
+                  <button onClick={goBack} disabled={overlayIndex <= 0} title="Geri" className={`p-2 rounded-lg shrink-0 ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'} ${overlayIndex <= 0 ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                    <ArrowLeftIcon className="w-4 h-4" />
+                  </button>
+                  <button onClick={goForward} disabled={overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1} title="İrəli" className={`p-2 rounded-lg shrink-0 ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'} ${(overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                    <ArrowRightIcon className="w-4 h-4" />
+                  </button>
+                  <button onClick={reloadOverlay} title="Yenilə" className={`p-2 rounded-lg shrink-0 ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'}`}>
+                    <RefreshIcon className="w-4 h-4" />
+                  </button>
+                  {/* Tab counter (opens tab switcher) */}
+                  <button onClick={() => { setOverlayShellOpen(false); setShowTabSwitcher(true); }} className={`w-9 h-9 rounded-lg font-semibold flex items-center justify-center shrink-0 ${isLightOverlay ? 'bg-black/10 text-black hover:bg-black/15 border border-black/20' : 'bg-white/10 text-white hover:bg-white/15 border border-white/20'}`} title="Tablar" aria-label="Tablar">
+                    {Math.max(1, mobileTabCount || 0)}
+                  </button>
+                  {overlayUrl && (
+                    <div className={`ml-1 inline-flex rounded-xl p-0.5 border shrink-0 hidden sm:inline-flex ${isLightOverlay ? 'bg-black/10 border-black/15' : 'bg-white/10 border-white/15'}`}>
+                      <button onClick={() => setOverlayOpenMode('original')} className={`px-2.5 py-1 text-[11px] rounded-lg ${overlayOpenMode === 'original' ? 'bg-accent/40 text-white' : (isLightOverlay ? 'text-black/80 hover:bg-black/10' : 'text-white/80 hover:bg-white/10')}`}>iframe</button>
+                      <button onClick={() => setOverlayOpenMode('proxy')} className={`px-2.5 py-1 text-[11px] rounded-lg ${overlayOpenMode === 'proxy' ? 'bg-accent/40 text-white' : (isLightOverlay ? 'text-black/80 hover:bg-black/10' : 'text-white/80 hover:bg-white/10')}`}>original</button>
+                    </div>
+                  )}
+                </div>
+                {/* Row 2: search input */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={overlaySearch}
+                    onChange={(e) => setOverlaySearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const v = (overlaySearch || '').trim();
+                        if (!v) return;
+                        if (isProbablyUrl(v)) { navigateOverlay(normalizeUrl(v)); setOverlaySearch(''); return; }
+                        closeOverlay(); doSearch(1, v);
+                      }
+                    }}
+                    placeholder="Axtar..."
+                    className={`flex-1 min-w-0 text-base px-4 py-2.5 rounded-full focus:outline-none focus:ring-2 focus:ring-accent/70 border shadow-[inset_0_0_0_1px_rgba(255,255,255,.06)] ${isLightOverlay ? 'bg-white/80 text-black placeholder-black/60 border-black/20' : 'bg-black/45 text-white placeholder-white/70 border-white/20'} backdrop-blur-xl`}
+                  />
+                </div>
+              </div>
+            )}
             {/* Incognito landing or web iframe */}
             {overlayIncognito && !overlayUrl ? (
               <div className="flex-1 w-full flex items-center justify-center p-6">
@@ -1595,46 +2606,87 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 </div>
               </div>
             ) : overlayIncognito ? (
-              <div className="flex-1 w-full overflow-auto p-3 md:p-6">
+              <>
                 {overlayNotice && (
-                  <div className="mx-auto max-w-6xl mb-3 px-3 py-2 bg-amber-500/15 text-amber-200 text-xs border border-amber-400/30 rounded-xl">{overlayNotice}</div>
+                  <div className="px-3 py-2 bg-amber-500/15 text-amber-200 text-xs border-b border-amber-400/30">{overlayNotice}</div>
                 )}
-                <div className="mx-auto w-full max-w-6xl h-[72vh] md:h-[80vh] rounded-3xl border border-white/15 bg-white/5 backdrop-blur overflow-hidden shadow-2xl">
-                  <iframe
-                    key={`${(overlayOpenMode === 'proxy' ? toProxyUrl(overlayUrl!) : overlayUrl) ?? ''}-${overlayKey}`}
-                    src={overlayUrl ? (overlayOpenMode === 'proxy' ? toProxyUrl(overlayUrl) : overlayUrl) : ''}
-                    className={`w-full h-full ${isLightOverlay ? 'bg-white' : 'bg-black'}`}
-                    referrerPolicy="no-referrer-when-downgrade"
-                    allow="autoplay; fullscreen; clipboard-read; clipboard-write; geolocation; microphone; camera; display-capture; accelerometer; gyroscope; payment; magnetometer; midi; encrypted-media; picture-in-picture; web-share"
-                    allowFullScreen
-                    onLoad={() => { overlayLoadedRef.current = true; if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; } }}
-                  />
+                <div className="relative flex-1 w-full">
+                  {(tabsIncog.length > 0) && tabsIncog.map(t => {
+                    const visible = (t.id === activeTabIdIncog) && !!t.url;
+                    const isImg = !!(t.url && isImageUrlLike(t.url));
+                    if (isImg) {
+                      return (
+                        <img
+                          key={t.id}
+                          src={t.url!}
+                          style={{ display: visible ? 'block' : 'none' }}
+                          className={`absolute inset-0 w-full h-full object-contain ${isLightOverlay ? 'bg-white' : 'bg-black'}`}
+                          alt="şəkil"
+                          onLoad={() => { if (t.id === activeTabIdIncog) { overlayLoadedRef.current = true; setOverlayLoading(false); if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; } } }}
+                        />
+                      );
+                    }
+                    const src = t.url ? (overlayOpenMode === 'proxy' ? toProxyUrl(t.url) : toEmbedUrl(t.url)) : '';
+                    return (
+                      <iframe
+                        key={t.id}
+                        src={src}
+                        style={{ display: visible ? 'block' : 'none' }}
+                        className={`absolute inset-0 w-full h-full ${isLightOverlay ? 'bg-white' : 'bg-black'}`}
+                        referrerPolicy="no-referrer-when-downgrade"
+                        allow="autoplay; fullscreen; clipboard-read; clipboard-write; geolocation; microphone; camera; display-capture; accelerometer; gyroscope; payment; magnetometer; midi; encrypted-media; picture-in-picture; web-share"
+                        allowFullScreen
+                        onLoad={() => { if (t.id === activeTabIdIncog) { overlayLoadedRef.current = true; setOverlayLoading(false); if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; } } }}
+                      />
+                    );
+                  })}
                 </div>
-              </div>
+              </>
             ) : (
               (() => {
-                const src = overlayUrl ? (overlayOpenMode === 'proxy' ? toProxyUrl(overlayUrl) : overlayUrl) : '';
                 return (
                   <>
                     {overlayNotice && (
                       <div className="px-3 py-2 bg-amber-500/15 text-amber-200 text-xs border-b border-amber-400/30">{overlayNotice}</div>
                     )}
-                    <iframe
-                      key={`${src}-${overlayKey}`}
-                      src={src}
-                      className={`flex-1 w-full ${isLightOverlay ? 'bg-white' : 'bg-black'}`}
-                      referrerPolicy="no-referrer-when-downgrade"
-                      allow="autoplay; fullscreen; clipboard-read; clipboard-write; geolocation; microphone; camera; display-capture; accelerometer; gyroscope; payment; magnetometer; midi; encrypted-media; picture-in-picture; web-share"
-                      allowFullScreen
-                      onLoad={() => { overlayLoadedRef.current = true; if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; } }}
-                    />
+                    <div className="relative flex-1 w-full">
+                      {(tabsNormal.length > 0) && tabsNormal.map(t => {
+                        const visible = (t.id === activeTabIdNormal) && !!t.url;
+                        const isImg = !!(t.url && isImageUrlLike(t.url));
+                        if (isImg) {
+                          return (
+                            <img
+                              key={t.id}
+                              src={t.url!}
+                              style={{ display: visible ? 'block' : 'none' }}
+                              className={`absolute inset-0 w-full h-full object-contain ${isLightOverlay ? 'bg-white' : 'bg-black'}`}
+                              alt="şəkil"
+                              onLoad={() => { if (t.id === activeTabIdNormal) { overlayLoadedRef.current = true; setOverlayLoading(false); if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; } } }}
+                            />
+                          );
+                        }
+                        const src = t.url ? (overlayOpenMode === 'proxy' ? toProxyUrl(t.url) : toEmbedUrl(t.url)) : '';
+                        return (
+                          <iframe
+                            key={t.id}
+                            src={src}
+                            style={{ display: visible ? 'block' : 'none' }}
+                            className={`absolute inset-0 flex-1 w-full h-full ${isLightOverlay ? 'bg-white' : 'bg-black'}`}
+                            referrerPolicy="no-referrer-when-downgrade"
+                            allow="autoplay; fullscreen; clipboard-read; clipboard-write; geolocation; microphone; camera; display-capture; accelerometer; gyroscope; payment; magnetometer; midi; encrypted-media; picture-in-picture; web-share"
+                            allowFullScreen
+                            onLoad={() => { if (t.id === activeTabIdNormal) { overlayLoadedRef.current = true; setOverlayLoading(false); if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; } } }}
+                          />
+                        );
+                      })}
+                    </div>
                   </>
                 );
               })()
-            )}
+            )
+          }
           </div>
-        </div>
-      )}
+        </div>, document.body)}
 
       {/* AI Analysis: Image Zoom Modal */}
       {aiImageModalUrl && (

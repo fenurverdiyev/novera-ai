@@ -7,27 +7,66 @@ import type { VoiceOption } from '../types';
 // This key should be loaded from an environment variable, e.g., process.env.ELEVENLABS_API_KEY
 const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY;
 const ELEVENLABS_BASE_URL = 'https://api.elevenlabs.io/v1';
+const ALLOW_DIRECT_ELEVEN = (
+  (import.meta as any).env?.VITE_ELEVEN_ALLOW_DIRECT === 'true' ||
+  (import.meta as any).env?.VITE_ELEVEN_ALLOW_DIRECT === '1' ||
+  !!(import.meta as any).env?.VITE_ELEVENLABS_API_KEY
+);
 
 if (!ELEVENLABS_API_KEY) {
     console.warn('VITE_ELEVENLABS_API_KEY not found. Falling back to /api/elevenlabs-proxy if available.');
 }
 
-async function callProxy(text: string, voiceId: string): Promise<string | null> {
+// Normalize AZ text for TTS to avoid over-emphasis and robotic intonation
+function sanitizeAzeriTts(input: string): string {
     try {
-        const resp = await fetch('/api/elevenlabs-proxy', {
+        let s = (input || '').normalize('NFC');
+        // Remove most emojis/symbols that cause odd prosody
+        s = s.replace(/[\p{Extended_Pictographic}\p{So}]+/gu, ' ');
+        // Replace multiple punctuation like !!!??! with a single period
+        s = s.replace(/[!?]+/g, '.');
+        // Normalize spaced punctuation
+        s = s.replace(/\s+([.,…])/g, '$1');
+        // Collapse repeated periods to ellipsis style
+        s = s.replace(/\.{3,}/g, '…');
+        // Remove leftover stray symbols often read unnaturally
+        s = s.replace(/[“”"\*_/<>|#`~^]+/g, '');
+        // Collapse whitespace
+        s = s.replace(/\s+/g, ' ').trim();
+        // Ensure sentence ends with mild punctuation for stable cadence
+        if (s && !/[.!?…]$/.test(s)) s += '.';
+        return s;
+    } catch {
+        return (input || '').toString();
+    }
+}
+
+async function callProxy(text: string, voiceId: string, opts?: { stability?: number; similarityBoost?: number; style?: number; optimizeLatency?: number; outputFormat?: string }): Promise<string | null> {
+    try {
+        const TTS_ORIGIN = (import.meta as any).env?.VITE_TTS_BACKEND_URL || '';
+        const base = TTS_ORIGIN ? `${TTS_ORIGIN.replace(/\/$/, '')}` : '';
+        let url = base ? `${base}/api/elevenlabs-proxy` : '/api/elevenlabs-proxy';
+        const resp = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: text.trim(), voiceId })
+            body: JSON.stringify({
+                text: text.trim(),
+                voice_id: voiceId,
+                stability: opts?.stability ?? 0.5,
+                similarity_boost: opts?.similarityBoost ?? 0.75,
+                style: opts?.style ?? 0.0,
+                optimize_latency: opts?.optimizeLatency ?? 4,
+                output_format: opts?.outputFormat ?? 'mp3_22050_32',
+            })
         });
         if (!resp.ok) {
-            const t = await resp.text().catch(() => '');
-            console.error('Proxy TTS error:', resp.status, t);
+            // Silent fallback: do not log to console, return null to trigger direct API path
             return null;
         }
         const blob = await resp.blob();
         return URL.createObjectURL(blob);
     } catch (e) {
-        console.warn('Proxy not available or failed', e);
+        // Silent fallback
         return null;
     }
 }
@@ -39,26 +78,45 @@ export interface Voice {
 }
 
 export const AVAILABLE_VOICES: Voice[] = [
-    { id: 'TX3LPaxmHKxFdv7VOQHJ', name: 'Bella', category: 'premade' },
-    { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella', category: 'premade' },
-    { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni', category: 'premade' },
-    { id: 'VR6AewLTigWG4xSOukaG', name: 'Arnold', category: 'premade' },
+    { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', category: 'premade' },
+    { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah', category: 'premade' },
     { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam', category: 'premade' },
-    { id: 'yoZ06aMxZJJ28mfd3POQ', name: 'Sam', category: 'premade' },
+    { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni', category: 'premade' },
+    { id: 'GBv7mTt0atIp3Br8iCZE', name: 'Thomas', category: 'premade' },
+    { id: 'TX3LPaxmHKxFdv7VOQHJ', name: 'Liam', category: 'premade' },
 ];
 
 // Accept internal voice ids from Live UI (Zephyr, Sulafat, etc.) and map to ElevenLabs ids
 const INTERNAL_TO_ELEVEN: Record<string, string> = {
-    // female warm
-    Sulafat: 'TX3LPaxmHKxFdv7VOQHJ', // Bella
-    Zephyr:  'EXAVITQu4vr4xnSDxMaL', // Bella alt
+    // female voices
+    Sulafat: '21m00Tcm4TlvDq8ikWAM', // Rachel
+    Zephyr:  'EXAVITQu4vr4xnSDxMaL', // Sarah
     // male voices
     Gacrux:  'ErXwobaYiN019PkySvjV', // Antoni
-    Puck:    'VR6AewLTigWG4xSOukaG', // Arnold
+    Puck:    'GBv7mTt0atIp3Br8iCZE', // Thomas
     Charon:  'pNInz6obpgDQGcFmaJgB', // Adam
-    Fenrir:  'yoZ06aMxZJJ28mfd3POQ', // Sam
+    Fenrir:  'TX3LPaxmHKxFdv7VOQHJ', // Liam
 };
-const normalizeVoiceId = (id: string): string => INTERNAL_TO_ELEVEN[id] || id;
+
+// Optional persona-specific voice ids from env for higher fidelity
+const VOICE_ENV_MAP: Record<string, string | undefined> = {
+  Zephyr: (import.meta.env as any).VITE_ELEVEN_VOICE_ZEPHYR,
+  Sulafat: (import.meta.env as any).VITE_ELEVEN_VOICE_SULAFAT,
+  Gacrux: (import.meta.env as any).VITE_ELEVEN_VOICE_GACRUX,
+  Fenrir: (import.meta.env as any).VITE_ELEVEN_VOICE_FENRIR,
+  Charon: (import.meta.env as any).VITE_ELEVEN_VOICE_CHARON,
+  Puck: (import.meta.env as any).VITE_ELEVEN_VOICE_PUCK,
+};
+
+const normalizeVoiceId = (id: string): string => VOICE_ENV_MAP[id] || INTERNAL_TO_ELEVEN[id] || id;
+
+// eleven_v3 accepts only discrete stability values: 0.0, 0.5, 1.0
+function quantizeStability(v?: number): 0 | 0.5 | 1 {
+  const x = typeof v === 'number' ? Math.max(0, Math.min(1, v)) : 0.5;
+  if (x <= 0.25) return 0;
+  if (x <= 0.75) return 0.5 as 0.5;
+  return 1;
+}
 
 /**
  * Converts text to speech using ElevenLabs API
@@ -72,15 +130,21 @@ export async function textToSpeech(
     text: string,
     voiceId: string = AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ',
     stability: number = 0.5,
-    similarityBoost: number = 0.75
+    similarityBoost: number = 0.75,
+    style: number = 0.0
 ): Promise<string | null> {
     voiceId = normalizeVoiceId(voiceId);
+    const safeText = sanitizeAzeriTts(text);
+    // Prefer proxy first (better CORS + key safety)
+    const proxied = await callProxy(safeText, voiceId, { stability: quantizeStability(stability), similarityBoost, style, outputFormat: 'mp3_44100_128' });
+    if (proxied) return proxied;
+    if (!ALLOW_DIRECT_ELEVEN) return null;
+
     if (!ELEVENLABS_API_KEY) {
-        // Try proxy instead of disabling completely
-        return await callProxy(text, voiceId);
+        return null;
     }
 
-    if (!text || text.trim().length === 0) {
+    if (!safeText || safeText.trim().length === 0) {
         return null;
     }
 
@@ -93,12 +157,12 @@ export async function textToSpeech(
                 'xi-api-key': ELEVENLABS_API_KEY,
             },
             body: JSON.stringify({
-                text: text.trim(),
-                model_id: 'eleven_multilingual_v2',
+                text: safeText.trim(),
+                model_id: 'eleven_v3',
                 voice_settings: {
-                    stability,
+                    stability: quantizeStability(stability),
                     similarity_boost: similarityBoost,
-                    style: 0.0,
+                    style,
                     use_speaker_boost: true
                 }
             }),
@@ -117,10 +181,10 @@ export async function textToSpeech(
                         'xi-api-key': ELEVENLABS_API_KEY,
                     },
                     body: JSON.stringify({
-                        text: text.trim(),
-                        model_id: 'eleven_multilingual_v2',
+                        text: safeText.trim(),
+                        model_id: 'eleven_v3',
                         voice_settings: {
-                            stability,
+                            stability: quantizeStability(stability),
                             similarity_boost: similarityBoost,
                             style: 0.0,
                             use_speaker_boost: true
@@ -158,20 +222,30 @@ export async function textToSpeech(
  */
 export async function textToSpeechStream(
     text: string,
-    voiceId: string = AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ'
+    voiceId: string = AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ',
+    stability: number = 0.5,
+    similarityBoost: number = 0.75,
+    style: number = 0.0,
+    optimizeLatency: number = 4
 ): Promise<string | null> {
     voiceId = normalizeVoiceId(voiceId);
+    const safeText = sanitizeAzeriTts(text);
+    // Prefer proxy first (handles optimizeLatency + output format server-side)
+    const proxied = await callProxy(safeText, voiceId, { stability, similarityBoost, style, optimizeLatency, outputFormat: 'mp3_22050_32' });
+    if (proxied) return proxied;
+    if (!ALLOW_DIRECT_ELEVEN) return null;
+
     if (!ELEVENLABS_API_KEY) {
         console.warn('ElevenLabs API key not available');
         return null;
     }
 
-    if (!text || text.trim().length === 0) {
+    if (!safeText || safeText.trim().length === 0) {
         return null;
     }
 
     try {
-        const response = await fetch(`${ELEVENLABS_BASE_URL}/text-to-speech/${voiceId}/stream`, {
+        const response = await fetch(`${ELEVENLABS_BASE_URL}/text-to-speech/${voiceId}/stream?output_format=mp3_22050_32`, {
             method: 'POST',
             headers: {
                 'Accept': 'audio/mpeg',
@@ -179,12 +253,12 @@ export async function textToSpeechStream(
                 'xi-api-key': ELEVENLABS_API_KEY,
             },
             body: JSON.stringify({
-                text: text.trim(),
-                model_id: 'eleven_multilingual_v2',
+                text: safeText.trim(),
+                model_id: 'eleven_v3',
                 voice_settings: {
-                    stability: 0.5,
-                    similarity_boost: 0.75,
-                    style: 0.0,
+                    stability: quantizeStability(stability),
+                    similarity_boost: Math.min(1, Math.max(0, similarityBoost)),
+                    style: Math.min(1, Math.max(0, style)),
                     use_speaker_boost: true
                 }
             }),

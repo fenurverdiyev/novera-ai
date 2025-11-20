@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+
 import type { NewsArticle } from '../types';
 import { ShareIcon, TranslateIcon, SparklesIcon } from './Icons';
 import { analyzeNewsArticle } from '../services/geminiService';
@@ -42,6 +43,13 @@ const languages = [
     { code: 'yo', name: 'Yoruba dili' }, { code: 'zu', name: 'Zulu dili' }
 ];
 
+const quickLangs = [
+  { code: 'az', name: 'Azərbaycan' },
+  { code: 'tr', name: 'Türk' },
+  { code: 'ru', name: 'Rus' },
+  { code: 'en', name: 'İngilis' },
+];
+
 interface NewsArticleActionsProps {
   article: NewsArticle;
   onTranslate: (langCode: string) => void;
@@ -80,12 +88,10 @@ export const NewsArticleActions: React.FC<NewsArticleActionsProps> = ({ article,
         setIsAnalyzing(false);
     };
 
-    const handleLanguageSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        const langCode = e.target.value;
-        if (langCode) {
-            onTranslate(langCode);
-            setShowLangSelector(false);
-        }
+    const handleLanguageClick = (langCode: string) => {
+        if (isTranslating) return;
+        onTranslate(langCode);
+        setShowLangSelector(false);
     };
 
     return (
@@ -99,32 +105,48 @@ export const NewsArticleActions: React.FC<NewsArticleActionsProps> = ({ article,
                 </button>
 
                 {isTranslated ? (
-                    <button onClick={onShowOriginal} className="flex items-center gap-2 px-4 py-2 bg-bg-onyx hover:bg-bg-slate rounded-full text-sm">
+                    <button onClick={onShowOriginal} className="flex items-center gap-2 px-4 py-2 rounded-full text-sm border border-white/15 bg-white/10 hover:bg-white/20 text-white/90 backdrop-blur-sm transition-colors">
                         Orijinalı göstər
                     </button>
                 ) : (
-                    <div className="relative" onMouseLeave={() => setShowLangSelector(false)}>
+                    <div className="relative">
                         <button 
-                            onClick={() => setShowLangSelector(!showLangSelector)} 
-                            onMouseEnter={() => setShowLangSelector(true)}
+                            onClick={() => setShowLangSelector(v => !v)}
                             disabled={isTranslating}
-                            className="flex items-center gap-2 px-4 py-2 bg-bg-onyx hover:bg-bg-slate rounded-full text-sm disabled:opacity-50"
+                            className="flex items-center gap-2 px-4 py-2 rounded-full text-sm border border-white/15 bg-white/10 hover:bg-white/20 text-white/90 backdrop-blur-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
                         >
                             {isTranslating ? <LoadingSpinner className="w-4 h-4" /> : <TranslateIcon className="w-4 h-4" />}
                             Tərcümə et
                         </button>
                         {showLangSelector && (
-                             <div className="absolute bottom-full mb-2 left-0 z-10">
-                                <select 
-                                    onChange={handleLanguageSelect}
-                                    defaultValue=""
-                                    className="w-56 h-64 bg-bg-onyx p-2 rounded-lg text-text-main focus:outline-none focus:ring-2 focus:ring-accent"
-                                    size={5} // Show multiple options at once
+                          <div className="absolute bottom-full mb-2 left-0 z-30 w-72 bg-bg-onyx/90 border border-white/10 rounded-xl shadow-2xl backdrop-blur-md p-3">
+                            <div className="text-xs text-text-sub mb-2">Tez seçim</div>
+                            <div className="flex flex-wrap gap-2 mb-3">
+                              {quickLangs.map(q => (
+                                <button
+                                  key={q.code}
+                                  onClick={() => handleLanguageClick(q.code)}
+                                  disabled={isTranslating}
+                                  className="px-3 py-1 rounded-full text-xs border border-white/10 bg-white/10 hover:bg-white/20 text-white/90 disabled:opacity-60"
                                 >
-                                    <option value="" disabled>Dil seçin...</option>
-                                    {languages.map(lang => <option key={lang.code} value={lang.code}>{lang.name}</option>)}
-                                </select>
+                                  {q.name}
+                                </button>
+                              ))}
                             </div>
+                            <div className="text-xs text-text-sub mb-2">Bütün dillər</div>
+                            <div className="max-h-56 overflow-y-auto space-y-1">
+                              {languages.map(l => (
+                                <button
+                                  key={l.code}
+                                  onClick={() => handleLanguageClick(l.code)}
+                                  disabled={isTranslating}
+                                  className="w-full text-left px-3 py-2 rounded-md hover:bg-white/15 text-white/90 disabled:opacity-60"
+                                >
+                                  {l.name}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         )}
                     </div>
                 )}

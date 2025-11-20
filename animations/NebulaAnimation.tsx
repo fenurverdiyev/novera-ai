@@ -19,6 +19,11 @@ export const NebulaAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
         let particles: any[] = [];
         let orbs: any[] = [];
         let time = 0;
+        const prefersReduced = typeof window !== 'undefined' && 'matchMedia' in window && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        let lowQ = prefersReduced;
+        let lastTs = performance.now();
+        let fpsAvg = 60;
+        let paused = false;
         
         class Orb {
             x: number; y: number;
@@ -96,14 +101,20 @@ export const NebulaAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
              canvas.width = window.innerWidth;
              canvas.height = window.innerHeight;
              orbs = [];
-             for (let i = 0; i < 5; i++) {
-                 orbs.push(new Orb());
-             }
+             const target = lowQ ? 3 : 5;
+             for (let i = 0; i < target; i++) { orbs.push(new Orb()); }
         }
 
         const animate = () => {
+            if (paused) return;
+            const now = performance.now();
+            const dt = now - lastTs;
+            lastTs = now;
+            const fps = 1000 / Math.max(1, dt);
+            fpsAvg = fpsAvg * 0.9 + fps * 0.1;
+            if (fpsAvg < 28) lowQ = true; else if (fpsAvg > 45 && !prefersReduced) lowQ = false;
             time += 0.005;
-            ctx.fillStyle = 'rgba(13, 15, 25, 0.2)';
+            ctx.fillStyle = lowQ ? 'rgba(13, 15, 25, 0.28)' : 'rgba(13, 15, 25, 0.2)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             let audioLevel = 0;
@@ -128,14 +139,14 @@ export const NebulaAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                 bassLevel = (bassSum / bassBins / 255); // Normalize to 0-1 range
             }
 
-            // Draw Nebula Background
             ctx.save();
             ctx.translate(canvas.width / 2, canvas.height / 2);
             ctx.rotate(time * 0.1);
             const scale = 1 + bassLevel * 0.1;
             ctx.scale(scale, scale);
 
-            for (let i = 0; i < 3; i++) {
+            const layers = lowQ ? 2 : 3;
+            for (let i = 0; i < layers; i++) {
                 ctx.beginPath();
                 const angle = time * 0.5 + i * Math.PI * 2 / 3;
                 const x = Math.cos(angle) * 100;
@@ -150,6 +161,9 @@ export const NebulaAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
             }
             ctx.restore();
 
+            const targetOrbs = lowQ ? 3 : 5;
+            if (orbs.length > targetOrbs) { orbs.length = targetOrbs; }
+            while (orbs.length < targetOrbs) { orbs.push(new Orb()); }
             orbs.forEach(orb => { orb.update(); orb.draw(); });
 
             for (let i = particles.length - 1; i >= 0; i--) {
@@ -159,7 +173,9 @@ export const NebulaAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                     particles.splice(i, 1);
                 }
             }
-            
+            if (particles.length > (lowQ ? 120 : 200)) {
+                particles.splice(0, particles.length - (lowQ ? 120 : 200));
+            }
             animationFrameId = requestAnimationFrame(animate);
         };
 
@@ -173,7 +189,8 @@ export const NebulaAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
                 const dist = Math.hypot(mouseX - orb.x, mouseY - orb.y);
                 if (dist < orb.radius) {
                     orbs.splice(i, 1);
-                    for (let j = 0; j < 50; j++) {
+                    const burst = lowQ ? 25 : 50;
+                    for (let j = 0; j < burst; j++) {
                         particles.push(new Particle(orb.x, orb.y, true));
                     }
                     setTimeout(() => orbs.push(new Orb()), 2000); // Respawn new orb
@@ -183,16 +200,22 @@ export const NebulaAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode })
         };
         
         const handleResize = () => setup();
+        const onVisibility = () => {
+            paused = document.hidden;
+            if (!paused) animationFrameId = requestAnimationFrame(animate);
+        };
 
         setup();
         animate();
         canvas.addEventListener('click', handleClick);
         window.addEventListener('resize', handleResize);
+        document.addEventListener('visibilitychange', onVisibility);
 
         return () => {
             cancelAnimationFrame(animationFrameId);
             canvas.removeEventListener('click', handleClick);
             window.removeEventListener('resize', handleResize);
+            document.removeEventListener('visibilitychange', onVisibility);
             if(ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
         };
     }, []);

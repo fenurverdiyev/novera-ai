@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, StopIcon, XIcon } from "./LiveIcons";
 import { ttsBinary } from "../services/ttsBackendService";
-import { textToSpeech, AVAILABLE_VOICES } from "../services/elevenLabsService";
+import { geminiTts } from "../services/geminiTtsService";
 interface Voice {
   id: string;
   name: string;
@@ -48,21 +48,51 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
     return m ? m.preview : null;
   };
 
+  const geminiVoiceNameFor = (id: string): string => {
+    switch (id) {
+      case 'Gacrux': return 'Gacrux'; // Kamran
+      case 'Fenrir': return 'Fenrir'; // Səlim
+      case 'Sulafat': return 'Sulafat'; // Arzu
+      case 'Zephyr': return 'Zephyr'; // Leyla
+      case 'Charon': return 'Charon'; // İlkin
+      case 'Puck': return 'Puck'; // Fərid
+      default: return 'Kore';
+    }
+  };
+
   const localCandidatesFor = (id: string): string[] => {
     const list: string[] = [];
+    const ORIGIN = (import.meta as any).env?.VITE_TTS_BACKEND_URL || '';
+    const abs = (p: string) => ORIGIN ? `${ORIGIN.replace(/\/$/, '')}${p}` : '';
     // 0) explicit preferred preview for this voice
     const preferred = preferredPreviewFor(id);
-    if (preferred) list.push(withVer(preferred));
+    if (preferred) {
+      list.push(withVer(preferred));
+      const a = abs(preferred);
+      if (a) list.push(withVer(a));
+    }
     // 1) manifest mapping if any
     const mapped = manifestRef.current?.[id];
-    if (mapped) list.push(withVer(`/voices/${mapped}`));
+    if (mapped) {
+      const p = `/voices/${mapped}`;
+      list.push(withVer(p));
+      const a = abs(p);
+      if (a) list.push(withVer(a));
+    }
     // 2) generic fallbacks
     const idLower = id.toLowerCase();
     const ascii = stripDiacritics(id);
     const asciiLower = ascii.toLowerCase();
     const bases = [`/voices/${idLower}`, `/voices/${id}`, `/voices/${asciiLower}`, `/voices/${ascii}`];
     const exts = ['.mp3', '.wav'];
-    for (const b of bases) for (const ext of exts) list.push(withVer(`${b}${ext}`));
+    for (const b of bases) {
+      for (const ext of exts) {
+        const rel = `${b}${ext}`;
+        list.push(withVer(rel));
+        const a = abs(rel);
+        if (a) list.push(withVer(a));
+      }
+    }
     return list;
   };
 
@@ -84,21 +114,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
     Puck: { pitch: 1.2, rate: 1.08 },
   };
 
-  // Map internal voice IDs to ElevenLabs voice IDs for high-quality preview
-  const elevenVoiceMap: Record<string, string> = {
-    // male, mature
-    Gacrux: 'ErXwobaYiN019PkySvjV', // Antoni
-    // childlike/energetic male
-    Fenrir: 'yoZ06aMxZJJ28mfd3POQ', // Sam
-    // warm female
-    Sulafat: 'TX3LPaxmHKxFdv7VOQHJ', // Bella
-    // bright/cheerful female (alt Bella id for variety)
-    Zephyr: 'EXAVITQu4vr4xnSDxMaL', // Bella alt
-    // technical, neutral male
-    Charon: 'pNInz6obpgDQGcFmaJgB', // Adam
-    // upbeat male
-    Puck: 'VR6AewLTigWG4xSOukaG', // Arnold
-  };
+  // ElevenLabs integration removed per requirement
 
   // Character ↔ Voice mapping and preferred preview mp3 per voice
   const voiceCharacterMap: Record<string, { character: string; preview: string }> = {
@@ -138,7 +154,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
     return () => window.clearTimeout(t);
   }, [slideDir]);
 
-  // Dinlə önizləmə
+  // Dinlə önizləmə (1) Lokal fayllar → (2) Gemini TTS → (3) Backend TTS fallback
   const handlePlayPreview = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setPlayError(null);
@@ -165,6 +181,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
       if (override) {
         if (!audioRef.current) audioRef.current = new Audio();
         const audio = audioRef.current;
+        try { (audio as any).crossOrigin = 'anonymous'; } catch {}
         audio.src = override;
         audio.onended = () => setIsPlaying(false);
         await audio.play();
@@ -173,7 +190,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
       }
     } catch {}
 
-    // 1) Lokal nümunələr (manifest.json və ya auto-adlandırma)
+    // 1) Lokal nümunələr (manifest.json və ya auto-adlandırma) – FE /voices və ya Backend /voices
     try {
       const candidates = localCandidatesFor(id);
       if (!audioRef.current) audioRef.current = new Audio();
@@ -204,22 +221,22 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
       }
     } catch {}
 
-    // 2) ElevenLabs TTS (client-side, requires VITE_ELEVENLABS_API_KEY)
+    // 2) Gemini TTS (primary for live parity)
     try {
-      const elevenId = elevenVoiceMap[id] || AVAILABLE_VOICES[0]?.id;
-      if (elevenId) {
-        const url = await textToSpeech(text, elevenId);
-        if (url) {
-          if (!audioRef.current) audioRef.current = new Audio();
-          const audio = audioRef.current;
-          audio.src = url;
-          audio.onended = () => setIsPlaying(false);
-          await audio.play();
-          setIsPlaying(true);
-          return;
-        }
+      const url = await geminiTts(text, { voiceName: geminiVoiceNameFor(id) });
+      if (url) {
+        if (!audioRef.current) audioRef.current = new Audio();
+        const audio = audioRef.current;
+        try { (audio as any).crossOrigin = 'anonymous'; } catch {}
+        audio.src = url;
+        audio.onended = () => setIsPlaying(false);
+        await audio.play();
+        setIsPlaying(true);
+        return;
       }
     } catch {}
+
+    // 2) ElevenLabs removed; skip
 
     // 3) Backend TTS fallback (FastAPI)
     try {
@@ -365,7 +382,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({ isOpen, voices, se
             </div>
 
             {playError && <div className="mt-3 text-sm text-red-400 text-center">{playError}</div>}
-            <audio ref={audioRef} className="hidden" preload="auto" />
+            <audio ref={audioRef} className="hidden" preload="auto" crossOrigin="anonymous" />
           </div>
         </div>
 

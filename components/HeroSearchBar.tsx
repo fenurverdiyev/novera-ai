@@ -24,6 +24,7 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
   const debounceRef = useRef<number | null>(null);
   const recognitionRef = useRef<any | null>(null);
   const sttBaseTextRef = useRef<string>('');
+  const manualStopRef = useRef<boolean>(false);
   const [isListening, setIsListening] = useState(false);
   const [showUploadMenu, setShowUploadMenu] = useState(false);
 
@@ -133,24 +134,34 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
     if (!SpeechRec) { alert('Səsdən mətnə çevirmə bu brauzerdə dəstəklənmir.'); return; }
     try {
       const rec: any = new SpeechRec();
-      rec.lang = (navigator.language || 'az-AZ');
-      rec.continuous = true; rec.interimResults = true;
+      let sttLang = (navigator.language || 'en-US');
+      try { const s = localStorage.getItem('nov-era-stt-lang'); if (s) sttLang = s; } catch {}
+      rec.lang = sttLang;
+      rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 3;
       sttBaseTextRef.current = query.trim();
       rec.onresult = (ev: any) => {
         let interim = '';
+        const pickBest = (alts: any) => {
+          try {
+            let best: any = alts[0] || {};
+            for (let j = 1; j < alts.length; j++) { if ((alts[j]?.confidence || 0) > (best?.confidence || 0)) best = alts[j]; }
+            return (best?.transcript || '').toString();
+          } catch { return (alts?.[0]?.transcript || '').toString(); }
+        };
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          const res = ev.results[i]; const txt = res[0]?.transcript || '';
+          const res = ev.results[i];
+          const txt = pickBest(res);
           if (res.isFinal) { sttBaseTextRef.current = (sttBaseTextRef.current + ' ' + txt).trim(); setQuery(sttBaseTextRef.current); }
           else { interim += txt + ' '; }
         }
         if (interim) setQuery((sttBaseTextRef.current + ' ' + interim).trim());
       };
-      rec.onerror = () => { setIsListening(false); };
-      rec.onend = () => { setIsListening(false); recognitionRef.current = null; };
-      recognitionRef.current = rec; rec.start(); setIsListening(true);
+      rec.onerror = () => { setIsListening(false); if (!manualStopRef.current) { try { rec.stop(); } catch {}; try { rec.start(); setIsListening(true); } catch {} } };
+      rec.onend = () => { setIsListening(false); if (!manualStopRef.current) { try { rec.start(); setIsListening(true); return; } catch {} } recognitionRef.current = null; };
+      recognitionRef.current = rec; manualStopRef.current = false; rec.start(); setIsListening(true);
     } catch { setIsListening(false); }
   };
-  const stopListening = () => { try { recognitionRef.current?.stop(); } catch {} setIsListening(false); };
+  const stopListening = () => { try { manualStopRef.current = true; recognitionRef.current?.stop(); } catch {} setIsListening(false); };
   const toggleListening = () => { if (isListening) stopListening(); else startListening(); };
 
   

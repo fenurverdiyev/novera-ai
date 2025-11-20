@@ -3,7 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M50 0 L61 39 L100 50 L61 61 L50 100 L39 61 L0 50 L39 39 Z' fill='%2358A6FF'/%3E%3C/svg%3E" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no" />
     <title>NovEra - Yeni dövr başlayır</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -45,6 +50,16 @@
         color: var(--color-text-main);
       }
       
+      html, body, #root { height: 100%; min-height: 100%; }
+      body { overscroll-behavior-y: none; }
+      #root { min-height: calc(var(--vh, 1vh) * 100); }
+      @supports (height: 100dvh) {
+        #root { min-height: 100dvh; }
+      }
+      .app-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; }
+      * { -webkit-tap-highlight-color: transparent; }
+      .safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem); }
+
       #theme-animation-canvas {
         position: fixed;
         top: 0;
@@ -99,7 +114,18 @@
   }
 }
 </script>
-</head>
+    <script>
+      (function() {
+        const setVh = () => {
+          const vh = window.innerHeight * 0.01;
+          document.documentElement.style.setProperty('--vh', vh + 'px');
+        };
+        setVh();
+        window.addEventListener('resize', setVh);
+        window.addEventListener('orientationchange', setVh);
+      })();
+    </script>
+  </head>
   <body class="font-sans">
     <div id="loading-screen"></div>
     <div id="root" class="bg-transparent"></div>

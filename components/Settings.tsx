@@ -48,10 +48,12 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSettingsChange, 
                         <p className="text-xs text-text-sub mt-2">{theme.description}</p>
                         {theme.id === 'novera' && (
                           <div className="mt-3" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              type="button"
-                              onClick={openNovEraColorPicker}
-                              className="group w-full flex items-center justify-between rounded-lg bg-bg-onyx/70 hover:bg-bg-onyx/60 ring-1 ring-white/10 hover:ring-white/20 px-3 py-2 transition-colors"
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              onClick={openNovEraColorPicker as any}
+                              onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openNovEraColorPicker(ev as any); } }}
+                              className="group w-full flex items-center justify-between rounded-lg bg-bg-onyx/70 hover:bg-bg-onyx/60 ring-1 ring-white/10 hover:ring-white/20 px-3 py-2 transition-colors cursor-pointer"
                               style={{ boxShadow: settings.theme === 'novera' ? `0 0 10px ${themeColor}` : undefined }}
                               aria-label="NovEra fon rəngi seç"
                             >
@@ -64,7 +66,7 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSettingsChange, 
                                 />
                                 <span className="text-xs text-text-main/80 font-mono">{(settings.noveraColor || '#0d0f19').toUpperCase()}</span>
                               </span>
-                            </button>
+                            </div>
                             <input
                               ref={colorInputRef}
                               id="novera-color"

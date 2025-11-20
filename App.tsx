@@ -21,7 +21,6 @@ import LiveConversationView from './components/LiveConversationView';
 import { hasVisualIntent, hasPlaceIntent, hasNewsIntent, hasShoppingIntent, buildPlaceRecommendations, buildProductRecommendations, wantsProductRecommendations } from './utils/intents';
 import { refineVisualQuery } from './utils/refineVisualQuery';
 import { geminiTts } from './services/geminiTtsService';
-import { ttsBinary } from './services/ttsBackendService';
 // Simple visual/places intent detectors
 const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -62,13 +61,15 @@ const App: React.FC = () => {
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
         const migratedTheme = parsed.theme === 'rgbneon' ? 'plexus' : parsed.theme;
+        const allowed = new Set(['Gacrux','Fenrir','Sulafat','Zephyr','Charon','Puck','Kore','Lira']);
+        const normalizedVoiceId = allowed.has(parsed.voiceId) ? parsed.voiceId : 'Zephyr';
         // Ensure voice defaults exist for live conversation
-        return { noveraColor: '#000000', voiceEnabled: parsed.voiceEnabled ?? true, voiceId: parsed.voiceId || 'EXAVITQu4vr4xnSDxMaL', ...parsed, theme: migratedTheme };
+        return { noveraColor: '#000000', voiceEnabled: parsed.voiceEnabled ?? true, voiceId: normalizedVoiceId, ...parsed, theme: migratedTheme };
       }
     } catch (error) {
       console.error("Could not parse saved settings:", error);
     }
-    return { theme: 'novera', noveraColor: '#000000', voiceEnabled: true, voiceId: 'EXAVITQu4vr4xnSDxMaL' } as any;
+    return { theme: 'novera', noveraColor: '#000000', voiceEnabled: true, voiceId: 'Zephyr' } as any;
   });
   const [scrollOffset, setScrollOffset] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -80,13 +81,93 @@ const App: React.FC = () => {
   const analyserRef = useRef<AnalyserNode | null>(null);
     const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
     const sentenceQueueRef = useRef<string[]>([]);
-    const currentPlayingMessageIdRef = useRef<string | null>(null);
+  const currentPlayingMessageIdRef = useRef<string | null>(null);
   const isProcessingSentencesRef = useRef(false);
   const sentenceAudioCacheRef = useRef<Record<string, string | null>>({});
+  const singleCallAttemptedRef = useRef<Record<string, boolean>>({});
+  const sentenceRetryCountRef = useRef<Record<string, number>>({});
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   // Bridge status updates to Live view
   const dispatchLiveStatus = useCallback((s: 'idle' | 'speaking' | 'processing' | 'listening') => {
     try { window.dispatchEvent(new CustomEvent('nov-era-live-status' as any, { detail: s })); } catch {}
+  }, []);
+
+  // Audio unlock: resume AudioContext under a user gesture (mic click)
+  useEffect(() => {
+    const onUnlock = async () => {
+      try {
+        const AC: any = (window as any).AudioContext || (window as any).webkitAudioContext;
+        let ctx = audioContextRef.current as any;
+        if (!ctx) {
+          ctx = new AC();
+          audioContextRef.current = ctx;
+        }
+        if (ctx.state === 'suspended') {
+          try { await ctx.resume(); } catch {}
+        }
+        // short, near-silent oscillator to fully unlock
+        try {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          gain.gain.value = 0.0001;
+          osc.connect(gain).connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.05);
+        } catch {}
+        // additionally unlock HTMLAudio by playing a short silent WAV once
+        try {
+          const makeSilentWavUrl = () => {
+            const sr = 24000, ms = 50, samples = Math.floor(sr * ms / 1000);
+            const bytesPerSample = 2, channels = 1;
+            const dataSize = samples * channels * bytesPerSample;
+            const header = new ArrayBuffer(44);
+            const view = new DataView(header);
+            const writeString = (o: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+            writeString(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true);
+            writeString(8, 'WAVE'); writeString(12, 'fmt ');
+            view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+            view.setUint16(22, channels, true); view.setUint32(24, sr, true);
+            view.setUint32(28, sr * channels * bytesPerSample, true);
+            view.setUint16(32, channels * bytesPerSample, true);
+            view.setUint16(34, bytesPerSample * 8, true);
+            writeString(36, 'data'); view.setUint32(40, dataSize, true);
+            const pcm = new Uint8Array(dataSize); // silence
+            const wav = new Uint8Array(44 + dataSize);
+            wav.set(new Uint8Array(header), 0); wav.set(pcm, 44);
+            return URL.createObjectURL(new Blob([wav.buffer], { type: 'audio/wav' }));
+          };
+          const el = audioRef.current;
+          if (el) {
+            const url = makeSilentWavUrl();
+            try { el.muted = true; el.volume = 0.0; } catch {}
+            el.src = url;
+            try { await el.play(); } catch {}
+            try { el.pause(); } catch {}
+            try { el.currentTime = 0; } catch {}
+            try { el.src = ''; } catch {}
+            try { URL.revokeObjectURL(url); } catch {}
+            try { el.muted = false; el.volume = 1.0; } catch {}
+          }
+        } catch {}
+      } catch {}
+    };
+    window.addEventListener('nov-era-audio-unlock' as any, onUnlock as any);
+    return () => window.removeEventListener('nov-era-audio-unlock' as any, onUnlock as any);
+  }, []);
+
+  // Global: best-effort unlock on first user gesture (click/tap/keydown)
+  useEffect(() => {
+    const fire = () => { try { window.dispatchEvent(new Event('nov-era-audio-unlock' as any)); } catch {} };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') fire(); };
+    window.addEventListener('pointerdown', fire, { once: true } as any);
+    window.addEventListener('keydown', onKey as any, { once: true } as any);
+    return () => {
+      window.removeEventListener('pointerdown', fire as any);
+      window.removeEventListener('keydown', onKey as any);
+    };
+  }, []);
+  const dispatchLiveContent = useCallback((payload: { images?: string[]; videos?: string[]; places?: any[]; products?: any[]; news?: any[] }) => {
+    try { window.dispatchEvent(new CustomEvent('nov-era-live-content' as any, { detail: payload })); } catch {}
   }, []);
   // Global: run a Browser search (optionally from Incognito)
   useEffect(() => {
@@ -349,7 +430,9 @@ const App: React.FC = () => {
       const explicitGrounded = query.trim().startsWith('?');
       const groundedQuery = explicitGrounded ? query.trim().slice(1).trim() : query;
       // If images are attached, prefer pure analysis (no grounded web search)
-      const isGrounded = !hasImages && ((searchMode === 'universe') || explicitGrounded);
+      // IMPORTANT: For live (voice) queries we always stream (non-grounded) for fast TTS.
+      const baseGrounded = !hasImages && ((searchMode === 'universe') || explicitGrounded);
+      const isGrounded = isVocalQuery ? false : baseGrounded;
 
 
       if (isGrounded) {
@@ -398,6 +481,7 @@ const App: React.FC = () => {
               if (rec) {
                 setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
               }
+              try { if (isVocalQuery) dispatchLiveContent({ places: pr }); } catch {}
             }
           } catch {}
         }
@@ -406,6 +490,7 @@ const App: React.FC = () => {
             const nr = await newsPromiseG;
             if (nr && nr.length) {
               setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, news: nr } : msg));
+              try { if (isVocalQuery) dispatchLiveContent({ news: nr }); } catch {}
             }
           } catch {}
         }
@@ -416,6 +501,7 @@ const App: React.FC = () => {
               setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, products: sr } : msg));
               const rec = wantsProductRecommendations(groundedQuery) ? buildProductRecommendations(sr) : '';
               if (rec) setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
+              try { if (isVocalQuery) dispatchLiveContent({ products: sr }); } catch {}
             }
           } catch {}
         }
@@ -430,13 +516,16 @@ const App: React.FC = () => {
       const sentenceEndRegex = /[.!?…]/;
 
 
-      if (isVocalQuery && (settings.voiceEnabled ?? true)) {
+      if ((settings.voiceEnabled ?? true)) {
         currentPlayingMessageIdRef.current = modelMessageId;
         setPlayingMessageId(modelMessageId);
       }
 
 
-      const stream = streamChatQuery(groundedQuery, history, hasImages ? preparedImages : images, undefined, undefined, hasImages ? true : undefined);
+      // In live mode, enforce very concise answers (1–2 sentences)
+      const shortHint = isVocalQuery ? 'Keep the answer very short (1-2 sentences).' : '';
+      const callQuery = isVocalQuery ? `${groundedQuery}\n\n${shortHint}` : groundedQuery;
+      const stream = streamChatQuery(callQuery, history, hasImages ? preparedImages : images, undefined, undefined, hasImages ? true : undefined);
 
 
       // If we expect visuals/places/news/shopping, mark step 2 and prefetch in background
@@ -475,17 +564,30 @@ const App: React.FC = () => {
           }
 
 
-          if (isVocalQuery && (settings.voiceEnabled ?? true)) {
-            let match;
-            while ((match = sentenceAccumulator.match(sentenceEndRegex))) {
-              const sentence = sentenceAccumulator.substring(0, match.index! + 1).trim();
-              if (sentence) {
-                sentenceQueueRef.current.push(sentence);
-                if (!isProcessingSentencesRef.current) {
-                  processVocalStream();
+          if ((settings.voiceEnabled ?? true)) {
+            if (!singleCallTts) {
+              let match;
+              while ((match = sentenceAccumulator.match(sentenceEndRegex))) {
+                const sentence = sentenceAccumulator.substring(0, match.index! + 1).trim();
+                if (sentence) {
+                  sentenceQueueRef.current.push(sentence);
+                  if (!isProcessingSentencesRef.current) {
+                    processVocalStream();
+                  }
+                }
+                sentenceAccumulator = sentenceAccumulator.substring(match.index! + 1);
+              }
+              if (sentenceAccumulator.length >= 110) {
+                const cut = sentenceAccumulator.lastIndexOf(' ', 100);
+                if (cut > 60) {
+                  const early = sentenceAccumulator.substring(0, cut).trim();
+                  if (early) {
+                    sentenceQueueRef.current.push(early);
+                    if (!isProcessingSentencesRef.current) { processVocalStream(); }
+                  }
+                  sentenceAccumulator = sentenceAccumulator.substring(cut + 1);
                 }
               }
-              sentenceAccumulator = sentenceAccumulator.substring(match.index! + 1);
             }
           }
         }
@@ -518,6 +620,8 @@ const App: React.FC = () => {
         }
 
 
+        let localMergedImages: string[] | undefined;
+        let localMergedVideos: string[] | undefined;
         setMessages(prev => prev.map(msg => {
           if (msg.id !== modelMessageId) return msg;
           const mergedImages = chunk.images && chunk.images.length
@@ -526,6 +630,8 @@ const App: React.FC = () => {
           const mergedVideos = chunk.videos && chunk.videos.length
             ? Array.from(new Set([...(msg.videos || []), ...chunk.videos]))
             : msg.videos;
+          localMergedImages = mergedImages as any;
+          localMergedVideos = mergedVideos as any;
           return {
             ...msg,
             text: fullResponseText,
@@ -534,18 +640,49 @@ const App: React.FC = () => {
             videos: mergedVideos,
           };
         }));
+        try { if (isVocalQuery) dispatchLiveContent({ images: localMergedImages || [], videos: localMergedVideos || [] }); } catch {}
 
 
-        if (isVocalQuery) setLiveVocalResponse({ id: modelMessageId, text: fullResponseText });
+        if (isVocalQuery) {
+          setLiveVocalResponse({ id: modelMessageId, text: fullResponseText });
+          try { window.dispatchEvent(new CustomEvent('nov-era-live-text' as any, { detail: fullResponseText })); } catch {}
+        }
       }
 
 
       // Handle any remaining text in the accumulator
-      if (isVocalQuery && (settings.voiceEnabled ?? true) && sentenceAccumulator.trim()) {
-        const leftover = sentenceAccumulator.trim();
-        sentenceQueueRef.current.push(leftover);
-        if (!isProcessingSentencesRef.current) {
-          processVocalStream();
+      if ((settings.voiceEnabled ?? true)) {
+        if (singleCallTts) {
+          const stitched = (fullResponseText || '').trim();
+          if (stitched) {
+            currentPlayingMessageIdRef.current = modelMessageId;
+            setPlayingMessageId(modelMessageId);
+            try {
+              let u = await geminiTts(stitched, { voiceName: voiceNameFor(settings.voiceId) })
+              if (!u && !strictVoice) {
+                try { u = await geminiTts(stitched, { voiceName: fallbackVoiceFor(settings.voiceId) }); } catch {}
+              }
+              if (u && audioRef.current) {
+                audioRef.current.src = u;
+                try { if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume(); } catch {}
+                try { dispatchLiveStatus('speaking'); } catch {}
+                try {
+                  const a = audioRef.current;
+                  if (a) {
+                    try { a.volume = 1.0; } catch {}
+                    try { a.muted = false; } catch {}
+                    await a.play();
+                  }
+                } catch {}
+              }
+            } catch {}
+          }
+        } else if (sentenceAccumulator.trim()) {
+          const leftover = sentenceAccumulator.trim();
+          sentenceQueueRef.current.push(leftover);
+          if (!isProcessingSentencesRef.current) {
+            processVocalStream();
+          }
         }
       }
 
@@ -579,6 +716,7 @@ const App: React.FC = () => {
             if (rec) {
               setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
             }
+            try { if (isVocalQuery) dispatchLiveContent({ places: pr }); } catch {}
           }
         } catch {}
       }
@@ -587,6 +725,7 @@ const App: React.FC = () => {
               const nr = await newsPromise;
               if (nr && nr.length) {
                   setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, news: nr } : msg));
+                  try { if (isVocalQuery) dispatchLiveContent({ news: nr }); } catch {}
               }
           } catch {}
       }
@@ -597,6 +736,7 @@ const App: React.FC = () => {
                   setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, products: sr } : msg));
                   const rec = wantsProductRecommendations(groundedQuery) ? buildProductRecommendations(sr) : '';
                   if (rec) setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, text: (msg.text || '') + rec } : msg));
+                  try { if (isVocalQuery) dispatchLiveContent({ products: sr }); } catch {}
               }
           } catch {}
       }
@@ -671,9 +811,13 @@ const App: React.FC = () => {
         );
         case 'incognito':
           return (
-            <div className="flex-1 h-full">
-              <GoogleSearchView isIncognito={true} />
-            </div>
+            <BrowserView
+              onVisualQuery={(q, imgs) => handleSend(q, imgs)}
+              safeSearchMode={safeSearchMode}
+              openIncognito={true}
+              onOpenedIncognito={() => { /* opened */ }}
+              onOverlayClosed={() => { if (returnOnOverlayClose) { setReturnOnOverlayClose(false); setActiveView(previousView); } }}
+            />
           );
         case 'safe-search': return <SafeSearch value={safeSearchMode} onChange={(v) => setSafeSearchMode(v)} />;
         case 'news': return <News themeColor={activeThemeColor} />;
@@ -708,7 +852,7 @@ const App: React.FC = () => {
                             </div>
                         )}
                     </main>
-                    <footer className="bg-transparent pt-2">
+                    <footer className="bg-transparent pt-2 safe-bottom">
                         <SearchBar 
                             onSend={(q, imgs) => handleSend(q, imgs)} 
                             isLoading={isLoading} 
@@ -729,6 +873,14 @@ const App: React.FC = () => {
   const ActiveAnimation = THEMES.find(t => t.id === settings.theme)?.animation;
   const activeThemeColor = THEMES.find(t => t.id === settings.theme)?.colors[2];
 
+  useEffect(() => {
+    try {
+      if (activeThemeColor) {
+        document.documentElement.style.setProperty('--color-accent', activeThemeColor);
+      }
+    } catch {}
+  }, [activeThemeColor, settings.theme]);
+
 
   useEffect(() => {
     // Initialize Web Audio analyser for visualizations and playback routing
@@ -742,11 +894,13 @@ const App: React.FC = () => {
       // cache on element to avoid creating multiple MediaElementSourceNodes for same element
       el.__novEraAudioCtx = audioCtx;
       el.__novEraSource = source;
+      // Route via element for audible output; Web Audio only for visualization
+      try { el.muted = false; el.volume = 1.0; } catch {}
 
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
+      // Connect for visualization only
       source.connect(analyser);
-      analyser.connect(audioCtx.destination);
 
       audioContextRef.current = audioCtx;
       analyserRef.current = analyser;
@@ -763,182 +917,236 @@ const App: React.FC = () => {
       }
     };
   }, []);
-
-
-  useEffect(() => {
-    const unlockAudio = () => {
-      try {
-        if (audioContextRef.current?.state === 'suspended') {
-          audioContextRef.current.resume();
-        }
-      } catch (e) {
-        console.warn('AudioContext resume failed:', e);
+    const voiceToneFor = (id?: string): { pitch: number; rate: number } => {
+      const v = (id || '').trim();
+      switch (v) {
+        case 'Gacrux': return { pitch: 0.9, rate: 0.95 };
+        case 'Fenrir': return { pitch: 1.3, rate: 1.12 };
+        case 'Sulafat': return { pitch: 1.05, rate: 1.0 };
+        case 'Zephyr': return { pitch: 1.12, rate: 1.04 };
+        case 'Charon': return { pitch: 0.95, rate: 1.0 };
+        case 'Puck': return { pitch: 1.2, rate: 1.08 };
+        default: return { pitch: 1.0, rate: 1.0 };
       }
-      window.removeEventListener('pointerdown', unlockAudio);
     };
-    window.addEventListener('pointerdown', unlockAudio);
-    return () => window.removeEventListener('pointerdown', unlockAudio);
-  }, []);
+    const voiceNameFor = (id?: string): string => {
+      const v = (id || '').trim();
+      switch (v) {
+        case 'Gacrux': return 'Gacrux';
+        case 'Fenrir': return 'Fenrir';
+        case 'Sulafat': return 'Sulafat';
+        case 'Zephyr': return 'Zephyr';
+        case 'Charon': return 'Charon';
+        case 'Puck': return 'Puck';
+        default: return 'Kore';
+      }
+    };
+    const fallbackVoiceFor = (id?: string): string => {
+      const v = (id || '').trim();
+      switch (v) {
+        case 'Zephyr':
+        case 'Sulafat':
+          return 'Lira';
+        default:
+          return 'Kore';
+      }
+    };
+    const strictVoice = (settings as any)?.strictVoice ?? true;
+    const singleCallTts = false;
+    const allowSingleCallFallback = false;
 
+    // speechSynthesis fallback disabled by request (Gemini TTS only)
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const processVocalStream = useCallback(async () => {
+      if (isProcessingSentencesRef.current || !currentPlayingMessageIdRef.current) return;
+      if (sentenceQueueRef.current.length === 0) { dispatchLiveStatus('idle'); return; }
+      // Show processing state while we fetch/generate TTS
+      try { dispatchLiveStatus('processing'); } catch {}
+
+      isProcessingSentencesRef.current = true;
+      const sentence = sentenceQueueRef.current[0];
+      if (!sentence || !audioRef.current) { isProcessingSentencesRef.current = false; return; }
+
+      const personaTuning = (id?: string): { stab: number; sim: number } => {
+        const v = (id || '').trim();
+        switch (v) {
+          case 'Zephyr': return { stab: 0.45, sim: 0.80 };
+          case 'Sulafat': return { stab: 0.55, sim: 0.70 };
+          case 'Gacrux': return { stab: 0.65, sim: 0.70 };
+          case 'Fenrir': return { stab: 0.35, sim: 0.85 };
+          case 'Charon': return { stab: 0.60, sim: 0.75 };
+          case 'Puck': return { stab: 0.40, sim: 0.80 };
+          default: return { stab: 0.5, sim: 0.75 };
+    }
+  };
+  const personaStyleFor = (id?: string): number => {
+    const v = (id || '').trim();
+    switch (v) {
+      case 'Gacrux': return 0.18; // mature
+      case 'Fenrir': return 0.28; // energetic
+      case 'Sulafat': return 0.20; // warm
+      case 'Zephyr': return 0.24; // bright
+      case 'Charon': return 0.16; // informative
+      case 'Puck': return 0.26; // upbeat
+      default: return 0.20;
+    }
   };
 
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, isLoading]);
-
-
-  const stopPlayback = useCallback(() => {
-      if (audioRef.current) {
-          audioRef.current.pause();
-          audioRef.current.src = '';
-      }
-      setPlayingMessageId(null);
-      currentPlayingMessageIdRef.current = null;
-      sentenceQueueRef.current = [];
-      isProcessingSentencesRef.current = false;
-  }, []);
-
-
-  const processVocalStream = useCallback(async () => {
-    if (isProcessingSentencesRef.current || !currentPlayingMessageIdRef.current) {
-        return;
+  // Prefetch disabled (Gemini-only, minimize API calls)
+  const nexts: string[] = [];
+  for (const ns of nexts) {
+    const k = `${settings.voiceId || ''}::${ns}`;
+    if (ns && sentenceAudioCacheRef.current[k] === undefined) {
+      sentenceAudioCacheRef.current[k] = null;
+      try {
+        let u: string | null | undefined = undefined;
+        try { u = await geminiTts(ns, { voiceName: voiceNameFor(settings.voiceId) }); } catch {}
+        if (u) sentenceAudioCacheRef.current[k] = u;
+      } catch {}
     }
-    if (sentenceQueueRef.current.length === 0) {
-        dispatchLiveStatus('idle');
-        return;
-    }
+  }
 
-
-    isProcessingSentencesRef.current = true;
-    const sentence = sentenceQueueRef.current[0];
-
-
-    if (!sentence || !audioRef.current) {
-        isProcessingSentencesRef.current = false;
-        return;
-    }
-
-
+  const cacheKey = `${settings.voiceId || ''}::${sentence}`;
+  let url = sentenceAudioCacheRef.current[cacheKey];
+  let rateLimited = false;
+  if (url === undefined || url === null) {
     try {
-        const nextSentences = sentenceQueueRef.current.slice(1, 3);
-        nextSentences.forEach(nextSentence => {
-            if (nextSentence && sentenceAudioCacheRef.current[nextSentence] === undefined) {
-                sentenceAudioCacheRef.current[nextSentence] = null;
-                geminiTts(nextSentence)
-                  .then(url => {
-                    sentenceAudioCacheRef.current[nextSentence] = url;
-                  })
-                  .catch(async () => {
-                    try {
-                      const b = await ttsBinary(nextSentence, { voiceId: settings.voiceId });
-                      sentenceAudioCacheRef.current[nextSentence] = b;
-                    } catch {
-                      sentenceAudioCacheRef.current[nextSentence] = null;
-                    }
-                  });
-            }
-        });
-
-
-        let url = sentenceAudioCacheRef.current[sentence];
-        if (url === undefined || url === null) {
-            try {
-              url = await geminiTts(sentence);
-            } catch {
-              try { url = await ttsBinary(sentence, { voiceId: settings.voiceId }); } catch {}
-            }
-            sentenceAudioCacheRef.current[sentence] = url || null;
+      const tune = personaTuning(settings.voiceId);
+      const style = personaStyleFor(settings.voiceId);
+      url = await geminiTts(sentence, { voiceName: voiceNameFor(settings.voiceId) });
+      if (!url && !strictVoice) {
+        try { url = await geminiTts(sentence, { voiceName: fallbackVoiceFor(settings.voiceId) }); } catch (e: any) {
+          const msg = (e?.message || '').toString();
+          if (/rate|cooldown|429/i.test(msg)) rateLimited = true;
         }
+      }
+    } catch (e: any) {
+      const msg = (e?.message || '').toString();
+      if (/rate|cooldown|429/i.test(msg)) rateLimited = true;
+    }
+    sentenceAudioCacheRef.current[cacheKey] = url || null;
+  }
 
-
-        if (url && currentPlayingMessageIdRef.current) {
-            // Play with TTS audio
-            sentenceQueueRef.current.shift();
-            audioRef.current.src = url;
-            if (audioContextRef.current?.state === 'suspended') {
-                await audioContextRef.current.resume();
+      if (url && currentPlayingMessageIdRef.current) {
+        sentenceQueueRef.current.shift();
+        audioRef.current.src = url;
+        try { if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume(); } catch {}
+        try { dispatchLiveStatus('speaking'); } catch {}
+        try {
+          const a = audioRef.current;
+          if (a) {
+            try { a.volume = 1.0; } catch {}
+            try { a.muted = false; } catch {}
+            await a.play();
+          }
+        }
+        catch (e) {
+          try { if (audioContextRef.current?.state === 'suspended') { await audioContextRef.current.resume(); } } catch {}
+          try {
+            const a2 = audioRef.current;
+            if (a2) {
+              try { a2.volume = 1.0; } catch {}
+              try { a2.muted = false; } catch {}
+              await a2.play();
             }
-            try { dispatchLiveStatus('speaking'); } catch {}
-            await audioRef.current.play();
-        } else {
-            // Fallback: use Web Speech Synthesis so the queue does not stall
+          }
+          catch { url = null as any; }
+        }
+      }
+
+      if ((!url || !currentPlayingMessageIdRef.current)) {
+        // Fallback: try a single-call TTS for the rest of this message (reduces API calls when rate-limited)
+        const msgId = currentPlayingMessageIdRef.current || '';
+        if (allowSingleCallFallback && msgId && !singleCallAttemptedRef.current[msgId]) {
+          singleCallAttemptedRef.current[msgId] = true;
+          const stitched = sentenceQueueRef.current.join(' ');
+          if (stitched && audioRef.current) {
             try {
-                const utter = new SpeechSynthesisUtterance(sentence);
-                // Pick best available voice/lang (az → tr → en)
-                try {
-                  const list = window.speechSynthesis.getVoices?.() || [];
-                  const pick = list.find(v => (v.lang || '').toLowerCase().startsWith('az'))
-                    || list.find(v => (v.lang || '').toLowerCase().startsWith('tr'))
-                    || list.find(v => (v.lang || '').toLowerCase().startsWith('en'))
-                    || null;
-                  if (pick) { utter.voice = pick; utter.lang = pick.lang; } else { utter.lang = (navigator.language || 'tr-TR'); }
-                } catch { utter.lang = 'tr-TR'; }
-                utter.onend = () => {
-                    try { window.speechSynthesis.cancel(); } catch {}
-                    sentenceQueueRef.current.shift();
-                    isProcessingSentencesRef.current = false;
-                    try { dispatchLiveStatus(sentenceQueueRef.current.length ? 'speaking' : 'idle'); } catch {}
-                    processVocalStream();
-                };
-                utter.onerror = () => {
-                    // Drop this sentence and continue
-                    try { window.speechSynthesis.cancel(); } catch {}
-                    sentenceQueueRef.current.shift();
-                    isProcessingSentencesRef.current = false;
-                    setTimeout(processVocalStream, 0);
-                };
+              const t2 = personaTuning(settings.voiceId);
+              const s2 = personaStyleFor(settings.voiceId);
+              let u2 = await geminiTts(stitched, { voiceName: voiceNameFor(settings.voiceId) });
+              if (!u2 && !strictVoice) {
+                try { u2 = await geminiTts(stitched, { voiceName: fallbackVoiceFor(settings.voiceId) }); } catch {}
+              }
+              if (u2) {
+                sentenceQueueRef.current = [];
+                sentenceAudioCacheRef.current = { ...sentenceAudioCacheRef.current };
+                audioRef.current.src = u2;
+                try { if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume(); } catch {}
                 try { dispatchLiveStatus('speaking'); } catch {}
-                window.speechSynthesis.speak(utter);
-                return; // exit; onend will continue the pipeline
-            } catch {
-                // If even synthesis fails, drop this sentence and continue
-                sentenceQueueRef.current.shift();
+                try {
+                  const a3 = audioRef.current;
+                  if (a3) {
+                    try { a3.volume = 1.0; } catch {}
+                    await a3.play();
+                  }
+                }
+                catch {}
                 isProcessingSentencesRef.current = false;
                 setTimeout(processVocalStream, 0);
                 return;
-            }
+              }
+            } catch {}
+          }
         }
-    } catch (error) {
-        console.error("S 9s oxunark 99n x 9ta ba 5f verdi:", sentence, error);
-        if (currentPlayingMessageIdRef.current) {
-          setMessages(prev => prev.map(m => m.id === currentPlayingMessageIdRef.current ? { ...m, ttsError: 'S 9sl 9ndirm 9 m fcmk fcn olmad 31.' } : m));
+        // If still no URL: on rate-limit/cooldown, retry after short delay without dropping the sentence
+        const rc = sentenceRetryCountRef.current[cacheKey] || 0;
+        if (rateLimited && rc < 3) {
+          sentenceRetryCountRef.current[cacheKey] = rc + 1;
+          isProcessingSentencesRef.current = false;
+          try { dispatchLiveStatus('processing'); } catch {}
+          setTimeout(processVocalStream, 1200);
+          return;
         }
+        // Otherwise, drop this sentence and continue
+        sentenceRetryCountRef.current[cacheKey] = 0;
         sentenceQueueRef.current.shift();
         isProcessingSentencesRef.current = false;
-        processVocalStream();
-    }
-  }, [settings.voiceId]);
+        setTimeout(processVocalStream, 0);
+        return;
+      }
+    }, [settings.voiceId]);
 
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const handleAudioEnd = () => {
+    useEffect(() => {
+      const handleAudioEnd = () => {
         isProcessingSentencesRef.current = false;
         processVocalStream();
         if (sentenceQueueRef.current.length === 0) {
           try { dispatchLiveStatus('idle'); } catch {}
         }
-    };
-    const handleAudioError = () => {
+      };
+      const handleAudioError = () => {
         // Skip current sentence and continue
         isProcessingSentencesRef.current = false;
         processVocalStream();
-    };
+      };
 
+      const audio = audioRef.current;
+      if (!audio) return;
 
-    audio.addEventListener('ended', handleAudioEnd);
-    audio.addEventListener('error', handleAudioError);
-    return () => {
-      audio.removeEventListener('ended', handleAudioEnd);
-      audio.removeEventListener('error', handleAudioError);
-    };
-  }, [processVocalStream]);
+      audio.addEventListener('ended', handleAudioEnd);
+      audio.addEventListener('error', handleAudioError);
+      return () => {
+        audio.removeEventListener('ended', handleAudioEnd);
+        audio.removeEventListener('error', handleAudioError);
+      };
+    }, [processVocalStream]);
+
+  const stopPlayback = useCallback(() => {
+    try {
+      if (audioRef.current) {
+        try { audioRef.current.pause(); } catch {}
+        try { audioRef.current.currentTime = 0; } catch {}
+      }
+    } catch {}
+    sentenceQueueRef.current = [];
+    sentenceAudioCacheRef.current = {};
+    isProcessingSentencesRef.current = false;
+    currentPlayingMessageIdRef.current = null;
+    setPlayingMessageId(null);
+    try { dispatchLiveStatus('idle'); } catch {}
+  }, [dispatchLiveStatus]);
+
   const chunkText = (text: string): string[] => (text.match(/[^.!?…]+[.!?…]*|[^.!?]+$/g)?.map(s => s.trim()).filter(Boolean) || []);
 
   const handlePlayAudio = (messageId: string, text: string) => {
@@ -957,6 +1165,22 @@ const App: React.FC = () => {
     setPlayingMessageId(messageId);
     processVocalStream();
   };
+
+
+  // Auto-play the latest model message when ready (covers non-streaming/grounded answers)
+  const lastAutoSpokenIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!(settings.voiceEnabled ?? true)) return;
+    try {
+      const lastModel = [...messages].reverse().find(m => m.role === 'model');
+      if (!lastModel || !lastModel.text || lastModel.isLoading) return;
+      if (currentPlayingMessageIdRef.current === lastModel.id || playingMessageId === lastModel.id) return;
+      if (sentenceQueueRef.current.length > 0) return;
+      if (lastAutoSpokenIdRef.current === lastModel.id) return;
+      lastAutoSpokenIdRef.current = lastModel.id;
+      handlePlayAudio(lastModel.id, lastModel.text);
+    } catch {}
+  }, [messages, settings.voiceEnabled, playingMessageId]);
 
 
   const getPreferredNewsLocale = useCallback((): { hl: string; gl: string } => {
@@ -1018,7 +1242,7 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
-      <div className="flex-1 flex flex-col overflow-y-hidden w-0 min-w-0">
+      <div className={`flex-1 flex flex-col w-0 min-w-0 ${(activeView === 'browser' || activeView === 'google-search' || activeView === 'incognito') ? 'overflow-y-auto app-scroll' : 'overflow-y-hidden'}`}>
         {/* Mobile top bar */}
         <div className="md:hidden flex items-center justify-between px-3 py-2 border-b border-white/10 bg-bg-slate/80 backdrop-blur sticky top-0 z-40">
           <button onClick={() => setIsSidebarOpen(true)} className="p-2 rounded-lg hover:bg-white/10 text-white/90" aria-label="Menyunu aç">
@@ -1039,8 +1263,7 @@ const App: React.FC = () => {
         accept="image/*"
       />
       {/* Hidden audio element for TTS playback */}
-      <audio ref={audioRef} className="hidden" preload="auto" />
-
+      <audio ref={audioRef} className="hidden" preload="auto" playsInline crossOrigin="anonymous" />
       {/* Transparent/thin scrollbars for app scroll containers */}
       <style>
         {`
@@ -1064,7 +1287,6 @@ const App: React.FC = () => {
 
 
 export default App;
-
 
 
 

@@ -70,7 +70,7 @@ export const News: React.FC<{ themeColor?: string }> = ({ themeColor }) => {
   };
 
   if (selectedArticle) {
-      return <NewsArticleView article={selectedArticle} allArticles={articles} onBack={handleBack} onArticleSelect={handleArticleSelect} />;
+      return <NewsArticleView key={selectedArticle.id} article={selectedArticle} allArticles={articles} onBack={handleBack} onArticleSelect={handleArticleSelect} />;
   }
 
   return (

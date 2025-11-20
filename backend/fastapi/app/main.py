@@ -1,3 +1,19 @@
+def sanitize_azeri_tts(input_text: str) -> str:
+    try:
+        s = input_text or ""
+        # Remove emojis and symbols
+        s = re.sub(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]+", " ", s)
+        # Normalize whitespace and punctuation spacing
+        s = re.sub(r"[!?]+", ".", s)
+        s = re.sub(r"\s+([\.,…])", r"\1", s)
+        s = re.sub(r"\.{3,}", "…", s)
+        s = re.sub(r"[“”""\*_/<>|#`~^]+", "", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        if s and not re.search(r"[\.!?…]$", s):
+            s += "."
+        return s
+    except Exception:
+        return input_text or ""
 """
 NovEra TTS Backend (LOVO)
 """
@@ -5,12 +21,15 @@ NovEra TTS Backend (LOVO)
 import os
 import base64
 import asyncio
+import time
 import io
 import wave
 from typing import Optional, Any, Dict
+import re
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 import httpx
@@ -22,8 +41,40 @@ except Exception:
     # optional in production
     pass
 
+def _load_env_files_if_needed():
+    if os.getenv("ELEVENLABS_API_KEY") or os.getenv("VITE_ELEVENLABS_API_KEY"):
+        return
+    try:
+        app_dir = os.path.dirname(__file__)
+        fastapi_dir = os.path.dirname(app_dir)
+        backend_dir = os.path.dirname(fastapi_dir)
+        root_dir = os.path.dirname(backend_dir)
+        candidates = [
+            os.path.join(fastapi_dir, ".env"),
+            os.path.join(root_dir, ".env"),
+        ]
+        for p in candidates:
+            try:
+                if os.path.exists(p):
+                    with open(p, "r", encoding="utf-8") as f:
+                        for line in f:
+                            s = line.strip()
+                            if not s or s.startswith("#") or "=" not in s:
+                                continue
+                            k, v = s.split("=", 1)
+                            k = k.strip()
+                            v = v.strip().strip('"').strip("'")
+                            if k and (os.getenv(k) is None):
+                                os.environ[k] = v
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+_load_env_files_if_needed()
+
 # CORS origins (Vite dev ports by default)
-ALLOWED_ORIGINS = [o for o in (os.getenv("ALLOWED_ORIGINS", "http://localhost:5175,http://localhost:5173").split(",")) if o]
+ALLOWED_ORIGINS = [o for o in (os.getenv("ALLOWED_ORIGINS", "http://localhost:5176,http://localhost:5175,http://localhost:5173").split(",")) if o]
 
 # LOVO.ai (Genny API)
 LOVO_API_KEY = os.getenv("LOVO_API_KEY")
@@ -33,11 +84,73 @@ LOVO_BASE = os.getenv("LOVO_BASE", "https://api.genny.lovo.ai/api/v1")
 if not LOVO_API_KEY:
     print("Warning: LOVO_API_KEY is not set. TTS endpoints will be disabled until configured.")
 
-# Gemini API (prefer dedicated translate key, fallback to generic)
-TRANSLATE_API_KEY = os.getenv("GEMINI_TRANSLATE_API_KEY") or os.getenv("GEMINI_API_KEY")
-# Gemini TTS API Key (prefer dedicated, fallback to generic)
-GEMINI_TTS_API_KEY = os.getenv("GEMINI_TTS_API_KEY") or os.getenv("GEMINI_API_KEY")
+# ElevenLabs
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY") or os.getenv("VITE_ELEVENLABS_API_KEY")
+if not ELEVENLABS_API_KEY:
+    print("Warning: ELEVENLABS_API_KEY is not set. ElevenLabs proxy will be disabled until configured.")
+
+# Gemini API keys
+# Prefer dedicated keys; fallback to generic and VITE_* keys if present in root .env
+TRANSLATE_API_KEY = (
+    os.getenv("GEMINI_TRANSLATE_API_KEY")
+    or os.getenv("GEMINI_API_KEY")
+    or os.getenv("GEMINI_TTS_API_KEY")
+    or os.getenv("VITE_GEMINI_TTS_API_KEY")
+    or os.getenv("VITE_GEMINI_API_KEY")
+)
+# Gemini TTS API Key(s)
+GEMINI_TTS_API_KEY = (
+    os.getenv("GEMINI_TTS_API_KEY")
+    or os.getenv("GEMINI_API_KEY")
+    or os.getenv("VITE_GEMINI_TTS_API_KEY")
+    or os.getenv("VITE_GEMINI_API_KEY")
+)
+GEMINI_TTS_API_KEYS = [k.strip() for k in (os.getenv("GEMINI_TTS_API_KEYS") or "").split(",") if k.strip()]
+if not GEMINI_TTS_API_KEYS and GEMINI_TTS_API_KEY:
+    GEMINI_TTS_API_KEYS = [GEMINI_TTS_API_KEY]
+_gemini_tts_key_index = 0
+
+def _get_current_tts_key() -> str | None:
+    global _gemini_tts_key_index
+    if not GEMINI_TTS_API_KEYS:
+        return None
+    return GEMINI_TTS_API_KEYS[_gemini_tts_key_index % len(GEMINI_TTS_API_KEYS)]
+
+def _advance_tts_key() -> None:
+    global _gemini_tts_key_index
+    if GEMINI_TTS_API_KEYS:
+        _gemini_tts_key_index = (_gemini_tts_key_index + 1) % len(GEMINI_TTS_API_KEYS)
+
 GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
+GCP_USER_PROJECT = (
+    os.getenv("GCP_PROJECT_NUMBER")
+    or os.getenv("GOOGLE_CLOUD_PROJECT_NUMBER")
+    or os.getenv("GCLOUD_PROJECT_NUMBER")
+)
+
+# Simple in-memory throttle for TTS calls to reduce 429s
+_tts_backoff_until: float = 0.0
+_last_tts_at: float = 0.0
+# Slightly larger default gap to avoid rate limits under quick successive calls
+MIN_TTS_GAP_S: float = float(os.getenv("GEMINI_TTS_MIN_GAP_MS", "900")) / 1000.0
+
+async def _throttle_tts():
+    global _tts_backoff_until, _last_tts_at
+    now = time.monotonic()
+    wait = 0.0
+    # honor global backoff window if set
+    if now < _tts_backoff_until:
+        wait = max(wait, _tts_backoff_until - now)
+    # enforce a minimum spacing between upstream calls
+    gap = now - _last_tts_at
+    if gap < MIN_TTS_GAP_S:
+        wait = max(wait, MIN_TTS_GAP_S - gap)
+    if wait > 0:
+        try:
+            await asyncio.sleep(wait)
+        except Exception:
+            pass
+    _last_tts_at = time.monotonic()
 if TRANSLATE_API_KEY:
     try:
         import google.generativeai as genai
@@ -56,7 +169,7 @@ try:
 except Exception:
     GENAI_LIVE_AVAILABLE = False
 
-app = FastAPI(title="NovEra Backend", version="1.1.0")
+app = FastAPI(title="NovEra Backend", version="1.1.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,6 +178,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve local voice preview files, if configured
+try:
+    _voices_dir = os.getenv("VOICES_DIR")
+    if _voices_dir and os.path.isdir(_voices_dir):
+        app.mount("/voices", StaticFiles(directory=_voices_dir), name="voices")
+except Exception:
+    pass
 
 
 class TranslateRequest(BaseModel):
@@ -84,6 +205,15 @@ class GeminiTTSRequest(BaseModel):
     voice_name: Optional[str] = "Kore"
     sample_rate: Optional[int] = 24000
     channels: Optional[int] = 1
+
+class ElevenProxyRequest(BaseModel):
+    text: str
+    voice_id: Optional[str] = None
+    stability: Optional[float] = 0.5
+    similarity_boost: Optional[float] = 0.75
+    style: Optional[float] = 0.0
+    optimize_latency: Optional[int] = 4
+    output_format: Optional[str] = "mp3_22050_32"
 
 
 def pcm_to_wav_bytes(pcm: bytes, *, channels: int = 1, rate: int = 24000, sample_width: int = 2) -> bytes:
@@ -146,7 +276,7 @@ async def lovo_tts_bytes(*, text: str, speaker_id: str, poll_timeout: float = 60
 async def tts(req: TTSRequest, format: str = Query("binary", pattern="^(binary|base64)$")):
     if not LOVO_API_KEY:
         raise HTTPException(status_code=503, detail="TTS service is not configured on the server.")
-    text = (req.text or "").strip()
+    text = sanitize_azeri_tts((req.text or "").strip())
     if not text:
         raise HTTPException(status_code=400, detail="'text' is required")
 
@@ -278,8 +408,13 @@ async def gemini_live_token():
         raise HTTPException(status_code=503, detail="google-genai package not installed on server.")
 
     try:
-        # Create client with v1alpha for ephemeral auth tokens
-        client = genai_live.Client(http_options={"api_version": "v1alpha"})
+        # Create client with API key and v1alpha for ephemeral auth tokens
+        api_key = (
+            GEMINI_TTS_API_KEY
+            or os.getenv("GEMINI_API_KEY")
+            or os.getenv("VITE_GEMINI_API_KEY")
+        )
+        client = genai_live.Client(api_key=api_key, http_options={"api_version": "v1alpha"})
         # Create token with defaults: uses:1, expireTime: +30min, newSessionExpireTime: +1min
         token = await asyncio.to_thread(client.auth_tokens.create, {  # type: ignore
             "config": {
@@ -305,7 +440,9 @@ async def gemini_tts(req: GeminiTTSRequest, format: str = Query("binary", patter
     Request body:
       { "text": str, "voice_name": str = "Kore", "sample_rate": 24000, "channels": 1 }
     """
-    if not GEMINI_TTS_API_KEY:
+    global _tts_backoff_until
+    current_key = _get_current_tts_key()
+    if not current_key:
         raise HTTPException(status_code=503, detail="Gemini TTS is not configured on the server.")
 
     text = (req.text or "").strip()
@@ -317,11 +454,13 @@ async def gemini_tts(req: GeminiTTSRequest, format: str = Query("binary", patter
     channels = int(req.channels or 1)
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TTS_MODEL}:generateContent"
-    headers = {"x-goog-api-key": GEMINI_TTS_API_KEY, "Content-Type": "application/json"}
+    headers = {"x-goog-api-key": current_key, "Content-Type": "application/json"}
     payload: Dict[str, Any] = {
-        "contents": [{"parts": [{"text": text}]}],
+        "contents": [{"role": "user", "parts": [{"text": text}]}],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
+            "responseMimeType": "audio/wav",
+            "response_mime_type": "audio/wav",
             "speechConfig": {
                 "voiceConfig": {
                     "prebuiltVoiceConfig": {"voiceName": voice_name}
@@ -333,38 +472,281 @@ async def gemini_tts(req: GeminiTTSRequest, format: str = Query("binary", patter
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(45.0)) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            if resp.status_code >= 400:
-                raise HTTPException(status_code=resp.status_code, detail=f"Gemini TTS error: {resp.text}")
-            data = resp.json()
+            attempts = 0
+            max_attempts = max(1, min(3, len(GEMINI_TTS_API_KEYS) if GEMINI_TTS_API_KEYS else 1))
+            data = None
+            while attempts < max_attempts:
+                # throttle between calls
+                try:
+                    await _throttle_tts()
+                except Exception:
+                    pass
+                resp = await client.post(url, headers=headers, json=payload)
+                # Handle 429/503: rotate to next key and retry
+                if resp.status_code in (429, 503):
+                    # short global backoff to reduce hammering
+                    try:
+                        _tts_backoff_until = time.monotonic() + 3.5
+                    except Exception:
+                        pass
+                    _advance_tts_key()
+                    headers["x-goog-api-key"] = _get_current_tts_key() or ""
+                    attempts += 1
+                    continue
+                # Handle 404: model not found for v1beta or not supported; try preview model explicitly
+                if resp.status_code == 404:
+                    try:
+                        err_txt_404 = (resp.text or "").lower()
+                    except Exception:
+                        err_txt_404 = ""
+                    alt_model = "gemini-2.5-flash-preview-tts"
+                    alt_url = f"https://generativelanguage.googleapis.com/v1beta/models/{alt_model}:generateContent"
+                    alt_payload_m = dict(payload)
+                    alt_payload_m["model"] = alt_model
+                    try:
+                        await _throttle_tts()
+                    except Exception:
+                        pass
+                    resp_m = await client.post(alt_url, headers=headers, json=alt_payload_m)
+                    if resp_m.status_code in (429, 503):
+                        try:
+                            _tts_backoff_until = time.monotonic() + 3.5
+                        except Exception:
+                            pass
+                        _advance_tts_key()
+                        headers["x-goog-api-key"] = _get_current_tts_key() or ""
+                        attempts += 1
+                        continue
+                    if resp_m.status_code >= 400:
+                        raise HTTPException(status_code=resp_m.status_code, detail=f"Gemini TTS error: {resp_m.text}")
+                    data = resp_m.json()
+                    break
+                if resp.status_code >= 400:
+                    # Attempt a one-time safe fallback to Lira/Kore if voice unsupported
+                    if resp.status_code == 400:
+                        try:
+                            err_txt = (resp.text or "").lower()
+                        except Exception:
+                            err_txt = ""
+                        # Fallback A: if mime complaint, drop responseMimeType and retry
+                        if ("allowed mimetypes" in err_txt) or ("response_mime_type" in err_txt) or ("responsemimetype" in err_txt):
+                            alt_payload = dict(payload)
+                            alt_gc = dict(alt_payload.get("generationConfig", {}))  # type: ignore
+                            # try removing both variants
+                            if "responseMimeType" in alt_gc:
+                                alt_gc.pop("responseMimeType", None)
+                            if "response_mime_type" in alt_gc:
+                                alt_gc.pop("response_mime_type", None)
+                            alt_payload["generationConfig"] = alt_gc
+                            try:
+                                await _throttle_tts()
+                            except Exception:
+                                pass
+                            resp2 = await client.post(url, headers=headers, json=alt_payload)
+                            if resp2.status_code in (429, 503):
+                                try:
+                                    _tts_backoff_until = time.monotonic() + 3.5
+                                except Exception:
+                                    pass
+                                _advance_tts_key()
+                                headers["x-goog-api-key"] = _get_current_tts_key() or ""
+                                attempts += 1
+                                continue
+                            if resp2.status_code >= 400:
+                                # Fallback B: try voice fallback to Lira/Kore (generationConfig.speechConfig)
+                                female_set = {"Lira", "Sulafat", "Zephyr"}
+                                fallback_voice = "Lira" if voice_name in female_set else "Kore"
+                                alt_payload2 = dict(alt_payload)
+                                alt_gc2 = dict(alt_payload2.get("generationConfig", {}))
+                                alt_sc2 = dict(alt_gc2.get("speechConfig", {}))
+                                alt_vc2 = dict(alt_sc2.get("voiceConfig", {}))
+                                alt_pvc2 = dict(alt_vc2.get("prebuiltVoiceConfig", {}))
+                                alt_pvc2["voiceName"] = fallback_voice
+                                alt_vc2["prebuiltVoiceConfig"] = alt_pvc2
+                                alt_sc2["voiceConfig"] = alt_vc2
+                                alt_gc2["speechConfig"] = alt_sc2
+                                alt_payload2["generationConfig"] = alt_gc2
+                                try:
+                                    await _throttle_tts()
+                                except Exception:
+                                    pass
+                                resp3 = await client.post(url, headers=headers, json=alt_payload2)
+                                if resp3.status_code in (429, 503):
+                                    try:
+                                        _tts_backoff_until = time.monotonic() + 3.5
+                                    except Exception:
+                                        pass
+                                    _advance_tts_key()
+                                    headers["x-goog-api-key"] = _get_current_tts_key() or ""
+                                    attempts += 1
+                                    continue
+                                if resp3.status_code >= 400:
+                                    raise HTTPException(status_code=resp3.status_code, detail=f"Gemini TTS error: {resp3.text}")
+                                data = resp3.json()
+                                break
+                            else:
+                                data = resp2.json()
+                                break
+                        else:
+                            # Fallback: try voice change Lira/Kore (generationConfig.speechConfig)
+                            female_set = {"Lira", "Sulafat", "Zephyr"}
+                            fallback_voice = "Lira" if voice_name in female_set else "Kore"
+                            alt_payload = dict(payload)
+                            alt_gc = dict(alt_payload.get("generationConfig", {}))  # type: ignore
+                            alt_sc = dict(alt_gc.get("speechConfig", {}))
+                            alt_vc = dict(alt_sc.get("voiceConfig", {}))
+                            alt_pvc = dict(alt_vc.get("prebuiltVoiceConfig", {}))
+                            alt_pvc["voiceName"] = fallback_voice
+                            alt_vc["prebuiltVoiceConfig"] = alt_pvc
+                            alt_sc["voiceConfig"] = alt_vc
+                            alt_gc["speechConfig"] = alt_sc
+                            alt_payload["generationConfig"] = alt_gc
+                            try:
+                                await _throttle_tts()
+                            except Exception:
+                                pass
+                            resp2 = await client.post(url, headers=headers, json=alt_payload)
+                            if resp2.status_code == 429:
+                                try:
+                                    _tts_backoff_until = time.monotonic() + 3.5
+                                except Exception:
+                                    pass
+                                _advance_tts_key()
+                                headers["x-goog-api-key"] = _get_current_tts_key() or ""
+                                attempts += 1
+                                continue
+                            if resp2.status_code >= 400:
+                                raise HTTPException(status_code=resp2.status_code, detail=f"Gemini TTS error: {resp2.text}")
+                            data = resp2.json()
+                            break
+                    else:
+                        raise HTTPException(status_code=resp.status_code, detail=f"Gemini TTS error: {resp.text}")
+                else:
+                    data = resp.json()
+                    break
+            if data is None:
+                raise HTTPException(status_code=429, detail="Gemini TTS rate limited across configured keys")
 
-        # Extract base64 PCM data (inlineData.data)
+        # Extract inline audio and its mimeType
         try:
             parts = (
                 data.get("candidates", [{}])[0]
                 .get("content", {})
-                .get("parts", [{}])
-            )
-            inline = parts[0].get("inlineData") or parts[0].get("inline_data") or {}
+                .get("parts", [])
+            ) or []
+            inline = None
+            for p in parts:
+                if isinstance(p, dict) and (p.get("inlineData") or p.get("inline_data")):
+                    inline = p.get("inlineData") or p.get("inline_data")
+                    break
+            if not inline:
+                raise Exception("no inlineData part")
+            mime = inline.get("mimeType") or inline.get("mime_type") or "audio/wav"
             b64 = inline.get("data")
         except Exception:
+            mime = None
             b64 = None
 
         if not b64 or not isinstance(b64, str):
             raise HTTPException(status_code=502, detail="Gemini TTS returned no audio data")
 
         try:
-            pcm_bytes = base64.b64decode(b64)
+            audio_bytes = base64.b64decode(b64)
         except Exception:
             raise HTTPException(status_code=502, detail="Failed to decode Gemini TTS audio data")
 
-        wav_bytes = pcm_to_wav_bytes(pcm_bytes, channels=channels, rate=sample_rate, sample_width=2)
-
-        if format == "base64":
-            return JSONResponse({"audio_base64": base64.b64encode(wav_bytes).decode("utf-8"), "mimeType": "audio/wav"})
-        return Response(content=wav_bytes, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+        # If inline is raw PCM/L16/RAW or mime is missing, wrap to WAV; else return original format
+        mime_l = (mime or "").lower()
+        if (not mime) or ("pcm" in mime_l) or ("l16" in mime_l) or ("raw" in mime_l):
+            wav_bytes = pcm_to_wav_bytes(audio_bytes, channels=channels, rate=sample_rate, sample_width=2)
+            if format == "base64":
+                return JSONResponse({"audio_base64": base64.b64encode(wav_bytes).decode("utf-8"), "mimeType": "audio/wav"})
+            return Response(content=wav_bytes, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+        else:
+            # Return as-is with the provided mime type (e.g., audio/wav, audio/mpeg, audio/ogg)
+            if format == "base64":
+                return JSONResponse({"audio_base64": base64.b64encode(audio_bytes).decode("utf-8"), "mimeType": mime or "audio/wav"})
+            return Response(content=audio_bytes, media_type=mime or "audio/wav", headers={"Cache-Control": "no-store"})
     except HTTPException:
         raise
     except Exception as e:
         print(f"Gemini TTS exception: {e}")
         raise HTTPException(status_code=502, detail="Failed to synthesize speech with Gemini API.")
+
+
+@app.get("/api/gemini-tts-test")
+async def gemini_tts_test(
+    text: str = Query(..., description="Text to synthesize"),
+    voice_name: str = Query("Kore", description="Prebuilt voice name (e.g., Gacrux, Fenrir, Sulafat, Zephyr, Charon, Puck)"),
+    format: str = Query("binary", pattern="^(binary|base64)$"),
+):
+    """Convenience endpoint to test Gemini TTS via query params.
+
+    Example:
+      GET /api/gemini-tts-test?text=Salam&voice_name=Sulafat
+    """
+    req = GeminiTTSRequest(text=text, voice_name=voice_name, sample_rate=24000, channels=1)
+    return await gemini_tts(req, format)  # type: ignore
+
+@app.post("/api/elevenlabs-proxy")
+async def elevenlabs_proxy(req: ElevenProxyRequest):
+    """Proxy ElevenLabs TTS via server (avoids CORS and hides key).
+
+    Prefers streaming endpoint for lower latency, falls back to standard endpoint.
+    """
+    key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("VITE_ELEVENLABS_API_KEY")
+    if not key:
+        raise HTTPException(status_code=503, detail="ElevenLabs is not configured on the server.")
+
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="'text' is required")
+    voice_id = (req.voice_id or "").strip() or "TX3LPaxmHKxFdv7VOQHJ"
+    raw_stability = max(0.0, min(1.0, float(req.stability or 0.5)))
+    # eleven_v3 supports only 0.0, 0.5, 1.0
+    if raw_stability <= 0.25:
+        stability = 0.0
+    elif raw_stability <= 0.75:
+        stability = 0.5
+    else:
+        stability = 1.0
+    similarity = max(0.0, min(1.0, float(req.similarity_boost or 0.75)))
+    style = max(0.0, min(1.0, float(req.style or 0.0)))
+    optimize = int(req.optimize_latency or 4)
+    output_fmt = (req.output_format or "mp3_22050_32").strip()
+
+    base = "https://api.elevenlabs.io/v1"
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": key,
+    }
+    body = {
+        "text": text,
+        "model_id": "eleven_v3",
+        "voice_settings": {
+            "stability": stability,
+            "similarity_boost": similarity,
+            "style": style,
+            "use_speaker_boost": True,
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            # try streaming endpoint first
+            stream_url = f"{base}/text-to-speech/{voice_id}/stream?output_format={output_fmt}"
+            resp = await client.post(stream_url, headers=headers, json=body)
+            if resp.status_code >= 400:
+                # fallback to standard endpoint
+                std_url = f"{base}/text-to-speech/{voice_id}"
+                resp2 = await client.post(std_url, headers=headers, json=body)
+                if resp2.status_code >= 400:
+                    raise HTTPException(status_code=resp2.status_code, detail=f"ElevenLabs error: {resp2.text}")
+                return Response(content=resp2.content, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+            return Response(content=resp.content, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ElevenLabs proxy exception: {e}")
+        raise HTTPException(status_code=502, detail="Failed to synthesize speech with ElevenLabs API.")

@@ -5,8 +5,8 @@ interface CameraViewProps {
   facingMode: 'user' | 'environment';
 }
 
-const FRAME_RATE = 2; // Send 2 frames per second
-const JPEG_QUALITY = 0.7;
+const FRAME_RATE = 3; // Send ~3 frames per second for better context
+const JPEG_QUALITY = 0.8; // Slightly higher quality for clearer analysis
 
 export const CameraView: React.FC<CameraViewProps> = ({ onFrame, facingMode }) => {
   const videoRef = useRef<HTMLVideoElement>(null);

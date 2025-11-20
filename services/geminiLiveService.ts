@@ -8,6 +8,7 @@ let flushTimer: number | null = null;
 let pendingInt16: Int16Array | null = null;
 let pendingLength = 0;
 let onAudioCb: ((url: string) => void) | null = null;
+let lastLiveText: string = '';
 
 // Accumulate server audio base64 chunks for the current turn
 let outChunks: string[] = [];
@@ -172,7 +173,7 @@ export async function connectGeminiLive(options?: { model?: string; systemInstru
       'gemini-2.5-flash-preview-native-audio-dialog',
     ].filter(Boolean) as string[];
 
-    const systemInstruction = options?.systemInstruction || 'Azərbaycan dilində, qısa və aydın cavab ver. Gərəkli olduqda sadə cümlələrdən istifadə et.';
+    const systemInstruction = options?.systemInstruction || "You are Nova AI, a multilingual assistant created by NovEra Group. Always respond in the language of the user's last message. If the user's language is unclear, respond in the browser's language (navigator.language). Keep answers brief and clear; use simple sentences when needed.";
     let connected = false;
     let lastErr: any = null;
     for (const model of modelCandidates) {
@@ -184,20 +185,29 @@ export async function connectGeminiLive(options?: { model?: string; systemInstru
           callbacks: {
             onopen: () => { isOpen = true; },
             onmessage: (message: any) => {
-              // Prefer direct 'data'
               pushAudioChunkBase64((message as any)?.data);
               const sc = (message as any)?.serverContent;
-              // Also scan modelTurn parts for inlineData
               try {
                 const parts = sc?.modelTurn?.parts || [];
+                let textBuf = '';
                 for (const p of parts) {
                   const b64 = p?.inlineData?.data || p?.inline_data?.data;
                   pushAudioChunkBase64(b64);
+                  const txt = (p?.text || p?.inlineData?.text || '').toString();
+                  if (txt) textBuf += (textBuf ? ' ' : '') + txt;
+                }
+                const t = (textBuf || '').trim();
+                if (t && (t.length > lastLiveText.length) && t.startsWith(lastLiveText)) {
+                  lastLiveText = t;
                 }
               } catch {}
               if (sc?.generationComplete || sc?.turnComplete) {
                 const url = flushAudioChunks();
                 if (url) onAudioCb?.(url);
+                if (lastLiveText) {
+                  try { window.dispatchEvent(new CustomEvent('nov-era-live-text' as any, { detail: lastLiveText })); } catch {}
+                }
+                lastLiveText = '';
               }
             },
             onerror: (e: any) => { console.warn('Gemini Live error', e?.message || e); },

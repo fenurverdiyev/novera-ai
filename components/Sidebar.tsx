@@ -102,7 +102,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
       <div className="px-4 mb-4 flex items-center justify-between gap-2">
         <Logo />
         <button
-          onClick={onNewChat}
+          onClick={() => {
+            if (activeView === 'incognito') {
+              setTimeout(() => { try { window.dispatchEvent(new Event('nov-era-new-tab' as any)); } catch {} }, 0);
+            } else {
+              setActiveView('browser');
+              setTimeout(() => { try { window.dispatchEvent(new Event('nov-era-new-tab' as any)); } catch {} }, 0);
+            }
+          }}
           className="p-2 rounded-lg bg-accent/15 text-accent hover:bg-accent/25 transition-colors ring-1 ring-accent/40 shadow-[0_0_8px_rgba(88,166,255,0.35)]"
         >
           <PlusIcon className="w-5 h-5" />

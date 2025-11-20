@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { textToSpeech, cleanupAudioUrls } from '../services/elevenLabsService';
+import { geminiTts } from '../services/geminiTtsService';
 
 export interface VoiceConversationProps {
     isActive: boolean;
@@ -29,20 +29,41 @@ export const VoiceConversation: React.FC<VoiceConversationProps> = ({
     const [audioQueue, setAudioQueue] = useState<AudioQueueItem[]>([]);
     const [currentPlayingIndex, setCurrentPlayingIndex] = useState(-1);
 
-    const recognitionRef = useRef<SpeechRecognition | null>(null);
+    const recognitionRef = useRef<any>(null);
     const audioRef = useRef<HTMLAudioElement>(null);
     const audioUrlsRef = useRef<string[]>([]);
     const isPlayingRef = useRef(false);
+    const manualStopRef = useRef(false);
+
+    const cleanupUrls = (urls: string[]) => {
+        urls.forEach((u) => { try { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); } catch {} });
+    };
+
+    const voiceNameFor = (id?: string): string => {
+        const v = (id || '').trim();
+        switch (v) {
+            case 'Gacrux': return 'Gacrux';
+            case 'Fenrir': return 'Fenrir';
+            case 'Sulafat': return 'Sulafat';
+            case 'Zephyr': return 'Zephyr';
+            case 'Charon': return 'Charon';
+            case 'Puck': return 'Puck';
+            default: return 'Kore';
+        }
+    };
 
     // Initialize speech recognition
     useEffect(() => {
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            const recognition = new SpeechRecognition();
+        if (('webkitSpeechRecognition' in window) || ('SpeechRecognition' in window)) {
+            const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+            const recognition = new SR();
             
             recognition.continuous = true;
             recognition.interimResults = true;
-            recognition.lang = 'az-AZ'; // Azerbaijani language
+            recognition.maxAlternatives = 3;
+            let sttLang = (navigator.language || 'en-US');
+            try { const s = localStorage.getItem('nov-era-stt-lang'); if (s) sttLang = s; } catch {}
+            recognition.lang = sttLang;
             
             recognition.onstart = () => {
                 setIsListening(true);
@@ -51,17 +72,22 @@ export const VoiceConversation: React.FC<VoiceConversationProps> = ({
             recognition.onresult = (event) => {
                 let finalTranscript = '';
                 let interimTranscript = '';
-                
+                const pickBest = (res: any) => {
+                    try {
+                        let best: any = res[0] || {};
+                        for (let j = 1; j < res.length; j++) {
+                            if ((res[j]?.confidence || 0) > (best?.confidence || 0)) best = res[j];
+                        }
+                        return (best?.transcript || '').toString();
+                    } catch { return (res?.[0]?.transcript || '').toString(); }
+                };
                 for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript;
-                    if (event.results[i].isFinal) {
-                        finalTranscript += transcript;
-                    } else {
-                        interimTranscript += transcript;
-                    }
+                    const res = event.results[i];
+                    const t = pickBest(res);
+                    if (res.isFinal) { finalTranscript += (t + ' '); }
+                    else { interimTranscript += (t + ' '); }
                 }
-                
-                const fullTranscript = finalTranscript || interimTranscript;
+                const fullTranscript = (finalTranscript || interimTranscript).trim();
                 setTranscript(fullTranscript);
                 onTranscript?.(fullTranscript);
             };
@@ -69,10 +95,17 @@ export const VoiceConversation: React.FC<VoiceConversationProps> = ({
             recognition.onerror = (event) => {
                 console.error('Speech recognition error:', event.error);
                 setIsListening(false);
+                if (!manualStopRef.current && isActive) {
+                    try { recognition.stop(); } catch {}
+                    try { recognition.start(); setIsListening(true); } catch {}
+                }
             };
             
             recognition.onend = () => {
                 setIsListening(false);
+                if (!manualStopRef.current && isActive) {
+                    try { recognition.start(); setIsListening(true); return; } catch {}
+                }
                 onVoiceEnd?.();
             };
             
@@ -89,19 +122,21 @@ export const VoiceConversation: React.FC<VoiceConversationProps> = ({
     // Cleanup audio URLs on unmount
     useEffect(() => {
         return () => {
-            cleanupAudioUrls(audioUrlsRef.current);
+            cleanupUrls(audioUrlsRef.current);
         };
     }, []);
 
     const startListening = useCallback(() => {
         if (recognitionRef.current && !isListening) {
             setTranscript('');
+            manualStopRef.current = false;
             recognitionRef.current.start();
         }
     }, [isListening]);
 
     const stopListening = useCallback(() => {
         if (recognitionRef.current && isListening) {
+            manualStopRef.current = true;
             recognitionRef.current.stop();
         }
     }, [isListening]);
@@ -128,7 +163,7 @@ export const VoiceConversation: React.FC<VoiceConversationProps> = ({
         // If audio URL is not ready, wait for it
         if (!nextItem.audioUrl && !nextItem.isLoaded) {
             try {
-                const audioUrl = await textToSpeech(nextItem.text, voiceId);
+                const audioUrl = await geminiTts(nextItem.text, { voiceName: voiceNameFor(voiceId) });
                 if (audioUrl) {
                     audioUrlsRef.current.push(audioUrl);
                     setAudioQueue(prev => prev.map((item, index) => 
@@ -200,7 +235,7 @@ export const VoiceConversation: React.FC<VoiceConversationProps> = ({
         for (let i = 0; i < preloadCount; i++) {
             const sentence = sentences[i].trim();
             if (sentence) {
-                textToSpeech(sentence, voiceId).then(audioUrl => {
+                geminiTts(sentence, { voiceName: voiceNameFor(voiceId) }).then(audioUrl => {
                     if (audioUrl) {
                         audioUrlsRef.current.push(audioUrl);
                         setAudioQueue(prev => prev.map((item, index) => 
@@ -231,7 +266,7 @@ export const VoiceConversation: React.FC<VoiceConversationProps> = ({
         setIsProcessingAudio(false);
         
         // Cleanup audio URLs
-        cleanupAudioUrls(audioUrlsRef.current);
+        cleanupUrls(audioUrlsRef.current);
         audioUrlsRef.current = [];
     }, []);
 

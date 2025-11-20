@@ -23,6 +23,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
   const recognitionRef = useRef<any | null>(null);
   const sttBaseTextRef = useRef<string>('');
   const debounceRef = useRef<number | null>(null);
+  const manualStopRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (debounceRef.current) {
@@ -120,16 +121,37 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
     }
     try {
       const rec: any = new SpeechRec();
-      rec.lang = (navigator.language || 'az-AZ');
+      let sttLang = (navigator.language || 'en-US');
+      try { const s = localStorage.getItem('nov-era-stt-lang'); if (s) sttLang = s; } catch {}
+      rec.lang = sttLang;
       rec.continuous = true;
       rec.interimResults = true;
+      rec.maxAlternatives = 3;
+      try {
+        const SGL: any = (window as any).SpeechGrammarList || (window as any).webkitSpeechGrammarList;
+        if (SGL && (sttLang || '').toLowerCase().startsWith('az')) {
+          const list = new SGL();
+          const grammar = '#JSGF V1.0; grammar az; public <az> = salam | salamlar | necəsən | zad | filan | bəs | yaxşı;';
+          try { list.addFromString(grammar, 1); rec.grammars = list; } catch {}
+        }
+      } catch {}
+
       sttBaseTextRef.current = query.trim();
 
       rec.onresult = (ev: any) => {
         let interim = '';
+        const pickBest = (alts: any) => {
+          try {
+            let best: any = alts[0] || {};
+            for (let j = 1; j < alts.length; j++) {
+              if ((alts[j]?.confidence || 0) > (best?.confidence || 0)) best = alts[j];
+            }
+            return (best?.transcript || '').toString();
+          } catch { return (alts?.[0]?.transcript || '').toString(); }
+        };
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
           const res = ev.results[i];
-          const txt = res[0]?.transcript || '';
+          const txt = pickBest(res);
           if (res.isFinal) {
             sttBaseTextRef.current = (sttBaseTextRef.current + ' ' + txt).trim();
             setQuery(sttBaseTextRef.current);
@@ -141,11 +163,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
           setQuery((sttBaseTextRef.current + ' ' + interim).trim());
         }
       };
-      rec.onerror = () => { setIsListening(false); };
-      rec.onend = () => { setIsListening(false); recognitionRef.current = null; };
+      rec.onerror = () => { setIsListening(false); if (!manualStopRef.current) { try { rec.stop(); } catch {}; try { rec.start(); setIsListening(true); } catch {} } };
+      rec.onend = () => { setIsListening(false); if (!manualStopRef.current) { try { rec.start(); setIsListening(true); return; } catch {} } recognitionRef.current = null; };
 
-      recognitionRef.current = rec;
-      rec.start();
+      recognitionRef.current = rec; manualStopRef.current = false; rec.start();
       setIsListening(true);
     } catch (e) {
       setIsListening(false);
@@ -153,7 +174,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
   };
 
   const stopListening = () => {
-    try { recognitionRef.current?.stop(); } catch {}
+    try { manualStopRef.current = true; recognitionRef.current?.stop(); } catch {}
     setIsListening(false);
   };
 

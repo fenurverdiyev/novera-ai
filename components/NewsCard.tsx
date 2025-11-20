@@ -31,19 +31,25 @@ export const NewsCard: React.FC<NewsCardProps> = ({ article, onSelect, variant =
   if (variant === 'compact') {
     return (
       <div
-        onClick={() => onSelect(article)}
-        className="flex gap-4 p-3 bg-bg-slate/50 rounded-lg hover:bg-bg-onyx transition-colors cursor-pointer"
+        role="button"
+        tabIndex={0}
+        onClick={(e) => { e.stopPropagation(); onSelect(article); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(article); } }}
+        className="relative flex gap-4 p-3 rounded-lg bg-white/5 border border-white/10 backdrop-blur-sm hover:bg-white/10 cursor-pointer transition-all duration-300 ease-out transform-gpu hover:-translate-y-0.5 hover:scale-[1.035] ring-1 ring-transparent hover:ring-accent/40 group"
         style={style}
       >
         <ProtectedImage
           src={article.imageUrl}
           alt={article.title}
-          className="w-24 h-24 object-cover rounded-md flex-shrink-0"
+          className="w-24 h-24 object-cover rounded-md flex-shrink-0 transition-transform duration-300 ease-out group-hover:scale-[1.05]"
           proxyParams="w=512&h=512&fit=cover&output=webp&q=90"
         />
         <div className="flex flex-col">
           <h3 className="text-md font-semibold text-text-main line-clamp-3">{article.title}</h3>
           <p className="text-xs text-text-sub mt-auto">{article.source} &middot; {timeAgo(article.publishedAt)}</p>
+        </div>
+        <div className="pointer-events-none absolute left-0 right-0 bottom-0 h-[2px] overflow-hidden">
+          <div className="h-full w-1/3" style={{ background: 'linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-accent), transparent 65%), transparent)', animation: 'novShimmer 2.8s linear infinite' }} />
         </div>
       </div>
     );
@@ -51,15 +57,18 @@ export const NewsCard: React.FC<NewsCardProps> = ({ article, onSelect, variant =
 
   return (
     <div
-      onClick={() => onSelect(article)}
-      className="bg-bg-slate rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1 cursor-pointer group"
+      role="button"
+      tabIndex={0}
+      onClick={(e) => { e.stopPropagation(); onSelect(article); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(article); } }}
+      className="relative bg-white/5 border border-white/10 rounded-xl overflow-hidden backdrop-blur-sm shadow-lg hover:shadow-2xl transition-transform duration-300 ease-out transform-gpu hover:-translate-y-1 hover:scale-[1.04] cursor-pointer group ring-1 ring-transparent hover:ring-accent/40"
       style={style}
     >
       <div className="relative">
         <ProtectedImage
           src={article.imageUrl}
           alt={article.title}
-          className="w-full h-56 object-cover"
+          className="w-full h-56 object-cover transition-transform duration-300 ease-out group-hover:scale-[1.03]"
           proxyParams="w=1280&h=720&fit=cover&output=webp&q=90"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
@@ -77,6 +86,9 @@ export const NewsCard: React.FC<NewsCardProps> = ({ article, onSelect, variant =
             <BookmarkIcon className="w-4 h-4" />
           </button>
         </div>
+      </div>
+      <div className="pointer-events-none absolute left-0 right-0 bottom-0 h-[2px] overflow-hidden">
+        <div className="h-full w-1/3" style={{ background: 'linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-accent), transparent 65%), transparent)', animation: 'novShimmer 2.8s linear infinite' }} />
       </div>
     </div>
   );

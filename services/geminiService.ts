@@ -43,7 +43,7 @@ const googleSearchTool: Tool = { googleSearch: {} as any };
 
 const mapMessagesToContent = (messages: Message[]): Content[] => {
     return messages.map(msg => ({
-        role: msg.role,
+        role: (msg.role === 'user') ? 'user' : 'model',
         parts: [{ text: msg.text }]
     }));
 };
@@ -61,19 +61,19 @@ export async function* streamChatQuery(
         yield { text: 'AI cavabı hazırda aktiv deyil (VITE_GEMINI_API_KEY qurulmayıb). Zəhmət olmasa ayarlarda API açarını əlavə edin.' };
         return;
     }
-    const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
-    const baseInstruction = "Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver. ";
+    const memoryBlock = memory && memory.trim() ? `\n\nSHORT MEMORY (for context):\n${memory.slice(-1500)}` : '';
+    const baseInstruction = `You are Nova AI, a multilingual assistant created by NovEra Group. Always respond in the language of the user's last message. If the user's language is unclear, respond in the browser's language (navigator.language).`;
     const systemInstruction = analysisOnly
       ? (
         baseInstruction +
-        "Bu sorğu yalnız şəkil/mətn ANALİZİNƏ yönəlib. Heç bir veb axtarış alətindən istifadə ETMƏ. Heç bir şəkil generasiyası ETMƏ. " +
-        "Verilən şəkil(lər) və mətn əsasında cavab ver; lazım olsa strukturlu JSON qaytara bilərsən." +
+        "This query is for TEXT ANALYSIS ONLY. DO NOT use any web search tools. DO NOT generate images. " +
+        "Respond based on the provided text and images; return structured JSON if needed." +
         memoryBlock
       )
       : (
         baseInstruction +
-        "İstifadəçi vizual (şəkil/video) istəyirsə, MÜTLƏQ `webSearch` alətini çağır və nəticələrin URL-lərini səthə çıxar. " +
-        "Alətdən istifadə etmədən vizual məzmun haqqında şərh vermə." +
+        "If the user requests visuals (images/videos), you MUST call the `webSearch` tool and surface the result URLs. " +
+        "Do not comment on visual content without using the tool." +
         memoryBlock
       );
     
@@ -98,33 +98,69 @@ export async function* streamChatQuery(
 
     const contents: Content[] = [...historicContent, { role: 'user', parts: userParts }];
 
-    let responseStream: any;
     const pickModel = () => {
       // Keep a single, stable model to avoid availability errors
       return model; // 'gemini-2.5-flash'
     };
     const useModel = pickModel();
+
+    // Non-streaming path to avoid 400 errors from stream endpoint
     try {
-      responseStream = await ai.models.generateContentStream({
+      const resp = await ai.models.generateContent({
         model: useModel,
         contents,
-        config: analysisOnly ? {
-          systemInstruction,
-        } : {
-          tools: [googleSearchTool, ...assistantTools],
-          systemInstruction,
-        },
+        // Keep config minimal; some accounts/models reject tool declarations in config
+        config: { systemInstruction },
       });
-    } catch (err) {
-      // Fallback: non-streaming single shot to return something fast and stable
+
+      let text = resp.text?.trim();
+      const imageRegex = /\u005Bimage:\s*(https?:\/\/[^\u005D]+)\u005D/g;
+      const videoRegex = /\u005Bvideo:\s*(https?:\/\/[^\u005D]+)\u005D/g;
+      const newImages: string[] = [];
+      const newVideos: string[] = [];
+      if (text) {
+        const imageMatches = text.matchAll(imageRegex);
+        for (const match of imageMatches) newImages.push(match[1]);
+        text = text.replace(imageRegex, '').trim();
+        const videoMatches = text.matchAll(videoRegex);
+        for (const match of videoMatches) newVideos.push(match[1]);
+        text = text.replace(videoRegex, '').trim();
+      }
+
+      const groundingChunks = (resp as any).candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      const seen = new Set<string>();
+      const sources: Source[] = groundingChunks
+        .map((g: any) => g?.web)
+        .filter((w: any) => w && w.uri)
+        .filter((w: any) => { if (seen.has(w.uri)) return false; seen.add(w.uri); return true; })
+        .slice(0, 8)
+        .map((w: any, i: number) => ({ uri: w.uri, title: w.title || new URL(w.uri).hostname, index: i + 1 }));
+
+      yield {
+        text,
+        sources: sources.length ? sources : undefined,
+        images: newImages.length ? newImages : undefined,
+        videos: newVideos.length ? newVideos : undefined,
+      };
+      return;
+    } catch (e2) {
+      // Fallback: retry with no config at all
       try {
-        const fallback = await ai.models.generateContent({
-          model: useModel,
-          contents,
-          config: analysisOnly ? { systemInstruction } : { tools: [googleSearchTool], systemInstruction },
-        });
-        const text = fallback.text?.trim();
-        const groundingChunks = (fallback as any).candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        const resp = await ai.models.generateContent({ model: useModel, contents });
+        const imageRegex = /\u005Bimage:\s*(https?:\/\/[^\u005D]+)\u005D/g;
+        const videoRegex = /\u005Bvideo:\s*(https?:\/\/[^\u005D]+)\u005D/g;
+        let text = resp.text?.trim();
+        const newImages: string[] = [];
+        const newVideos: string[] = [];
+        if (text) {
+          const imageMatches = text.matchAll(imageRegex);
+          for (const match of imageMatches) newImages.push(match[1]);
+          text = text.replace(imageRegex, '').trim();
+          const videoMatches = text.matchAll(videoRegex);
+          for (const match of videoMatches) newVideos.push(match[1]);
+          text = text.replace(videoRegex, '').trim();
+        }
+        const groundingChunks = (resp as any).candidates?.[0]?.groundingMetadata?.groundingChunks || [];
         const seen = new Set<string>();
         const sources: Source[] = groundingChunks
           .map((g: any) => g?.web)
@@ -132,69 +168,12 @@ export async function* streamChatQuery(
           .filter((w: any) => { if (seen.has(w.uri)) return false; seen.add(w.uri); return true; })
           .slice(0, 8)
           .map((w: any, i: number) => ({ uri: w.uri, title: w.title || new URL(w.uri).hostname, index: i + 1 }));
-        if (text) {
-          yield { text, sources: sources.length ? sources : undefined };
-          return;
-        }
-      } catch (e2) {
+        yield { text, sources: sources.length ? sources : undefined, images: newImages.length ? newImages : undefined, videos: newVideos.length ? newVideos : undefined };
+        return;
+      } catch {
         yield { text: 'Hazırda cavab generasiyasında problem yaşandı. Zəhmət olmasa bir qədər sonra yenidən cəhd edin.' };
         return;
       }
-    }
-
-    let sourceIndex = 1;
-    const seenUris = new Set<string>();
-    
-    const imageRegex = /\u005Bimage:\s*(https?:\/\/[^\u005D]+)\u005D/g;
-    const videoRegex = /\u005Bvideo:\s*(https?:\/\/[^\u005D]+)\u005D/g;
-
-
-    for await (const chunk of responseStream) {
-        let text = chunk.text;
-        
-        const newImages: string[] = [];
-        const newVideos: string[] = [];
-
-        if (text) {
-            const imageMatches = text.matchAll(imageRegex);
-            for (const match of imageMatches) {
-                newImages.push(match[1]);
-            }
-            text = text.replace(imageRegex, '').trim();
-
-            const videoMatches = text.matchAll(videoRegex);
-            for (const match of videoMatches) {
-                newVideos.push(match[1]);
-            }
-            text = text.replace(videoRegex, '').trim();
-        }
-
-        const newSources: Source[] = [];
-        const groundingChunks = chunk.candidates?.[0]?.groundingMetadata?.groundingChunks;
-        if (groundingChunks) {
-            for (const { web } of groundingChunks) {
-                if (web?.uri && !seenUris.has(web.uri)) {
-                    newSources.push({
-                        uri: web.uri,
-                        title: web.title || new URL(web.uri).hostname,
-                        index: sourceIndex++,
-                    });
-                    seenUris.add(web.uri);
-                }
-            }
-        }
-        
-        // Return tool calls in the wrapper shape expected by App.tsx: { functionCall: { name, args } }
-        const toolCallParts = chunk.candidates?.[0]?.content?.parts
-            ?.filter(part => !!(part as any).functionCall) as any[] | undefined;
-
-        yield { 
-            text, 
-            sources: newSources.length > 0 ? newSources : undefined,
-            images: newImages.length > 0 ? newImages : undefined,
-            videos: newVideos.length > 0 ? newVideos : undefined,
-            toolCalls: toolCallParts && toolCallParts.length ? toolCallParts : undefined,
-        };
     }
 }
 
@@ -208,7 +187,7 @@ export async function generateRelatedQuestions(prompt: string, answer: string): 
     if (!ai) return [];
     try {
         const fullPrompt = `Based on the following question and its answer, generate 3 concise and relevant follow-up questions that a curious user might ask next.
-IMPORTANT: The questions MUST be in the Azerbaijani language.
+IMPORTANT: The questions MUST be in the same language as the original question.
 
 Question: "${prompt}"
 
@@ -216,31 +195,39 @@ Answer: "${answer.substring(0, 2000)}..."
 
 Return the questions as a JSON array of strings.`;
 
-        const response = await ai.models.generateContent({
-            model,
-            contents: fullPrompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        questions: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.STRING
+        const modelsToTry = [model, 'gemini-1.5-flash'];
+        for (const m of modelsToTry) {
+            try {
+                const response = await ai.models.generateContent({
+                    model: m,
+                    contents: fullPrompt,
+                    config: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: Type.OBJECT,
+                            properties: {
+                                questions: {
+                                    type: Type.ARRAY,
+                                    items: { type: Type.STRING }
+                                }
                             }
                         }
                     }
+                });
+                const jsonStr = response.text?.trim() || '';
+                const result = jsonStr ? JSON.parse(jsonStr) : { questions: [] };
+                return result.questions || [];
+            } catch (e: any) {
+                const msg = (e && e.message ? String(e.message) : '');
+                if (/503|UNAVAILABLE|overloaded/i.test(msg)) {
+                    await new Promise(r => setTimeout(r, 350));
+                    continue;
                 }
+                break;
             }
-        });
-
-        const jsonStr = response.text.trim();
-        const result = JSON.parse(jsonStr);
-        return result.questions || [];
-
-    } catch (error) {
-        console.error("Error generating related questions:", error);
+        }
+        return [];
+    } catch {
         return [];
     }
 }
@@ -253,8 +240,9 @@ Return the questions as a JSON array of strings.`;
 export async function analyzeNewsArticle(article: NewsArticle): Promise<string> {
     if (!ai) return "AI təhlili hazırda əlçatmazdır. Xahiş edirik sonra yenidən cəhd edin.";
     try {
+        const { hl } = detectLocaleForSearch();
         const prompt = `Please analyze the following news article. Provide a concise, neutral summary covering the key points, any potential biases detected, and the wider implications of the story.
-        IMPORTANT: Your entire response MUST be in the Azerbaijani language.
+        IMPORTANT: Your entire response MUST be in the language "${hl}".
 
 Article Title: "${article.title}"
 Article Content: "${(article.content || article.summary || '').substring(0, 3000)}"
@@ -283,10 +271,11 @@ export async function getWeather(location: string): Promise<WeatherData> {
         if (!ai) {
             throw new Error('AI açarı yoxdur. Hava məlumatı üçün Open-Meteo modulundan istifadə edin.');
         }
+        const { hl } = detectLocaleForSearch();
         const response = await ai.models.generateContent({
             model,
             contents: `Get the current weather and a 5-day forecast for the location: "${location}".
-            IMPORTANT: All text content (location, condition, day) MUST be in the Azerbaijani language.
+            IMPORTANT: All text content (location, condition, day) MUST be in the language "${hl}".
             Return the result as a single, valid JSON object.
             If the location is found, the JSON object must have a "success" key set to true, and a "data" key containing the weather information with this structure:
             { "location": "City, Country", "current": { "temp": number, "condition": "string" }, "forecast": [ { "day": "string", "temp": number, "condition": "string" }, ... ] }
@@ -436,10 +425,12 @@ ${text.slice(0, 6000)}
  * This does not stream; it performs a single request for simplicity.
  */
 export async function answerWithGroundedSearch(query: string, opts?: { num?: number; gl?: string; hl?: string }, memory?: string) {
-  const memoryBlock = memory && memory.trim() ? `\n\nQISA YADDAŞ (kontekstə kömək üçün):\n${memory.slice(-1500)}` : '';
-  const systemInstruction = `Sən NovEra adlı köməkçisən və bütün cavablarını Azərbaycan dilində ver.\n\n` +
-    `Cavab verərkən Google Axtarış alətindən (grounding) istifadə et, iddiaları ən son mənbələrlə dəstəklə və [1], [2]... kimi istinadlar ver.\n` +
-    `Mənbələrdən sitat gətirərkən qısa və dəqiq ol.` + memoryBlock;
+  const memoryBlock = memory && memory.trim() ? `\n\nSHORT MEMORY (for context):\n${memory.slice(-1500)}` : '';
+  const systemInstruction = (
+    "You are Nova AI, a multilingual assistant created by NovEra Group. Always respond in the language of the user's last message.\n\n" +
+    "Use Google Search grounding where appropriate to support claims with up-to-date sources and provide references like [1], [2]... Keep citations concise." +
+    memoryBlock
+  );
 
   if (!ai) {
     return { text: 'AI açarı yoxdur. Zəhmət olmasa VITE_GEMINI_API_KEY təyin edin.', sources: [] as Source[] };

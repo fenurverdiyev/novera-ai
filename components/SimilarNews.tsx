@@ -17,9 +17,9 @@ export const SimilarNews: React.FC<SimilarNewsProps> = ({ currentArticle, allArt
   }
 
   return (
-    <div className="mt-12">
+    <div className="mt-12 relative z-50 pointer-events-auto isolate">
       <h2 className="text-2xl font-bold text-gem-text mb-4">Oxşar Xəbərlər</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 relative z-50 pointer-events-auto">
         {similarArticles.map(article => (
           <NewsCard key={article.id} article={article} onSelect={onArticleSelect} variant="compact" />
         ))}
