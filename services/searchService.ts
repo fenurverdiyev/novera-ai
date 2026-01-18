@@ -22,8 +22,24 @@ const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 // Basic safety filters to avoid NSFW/suspicious links
 const blockedHostPatterns = [
-  /porn/i, /adult/i, /nsfw/i, /redtube/i, /xvideos/i, /xnxx/i, /pornhub/i,
+  /porn/i, /adult/i, /nsfw/i, /redtube/i, /xvideos/i, /xnxx/i, /pornhub/i, /sex/i, /nude/i, /erot/i, /hentai/i, /brazzers/i, /xhamster/i, /youjizz/i, /beeg/i, /spankbang/i,
 ];
+const explicitKeywords = [
+  'porn', 'adult', 'sex', 'nude', 'erotic', 'hentai', 'naked', 'xxx', '18+', 'yalın', 'çılpaq', 'seks', 'porno', 'ero', 'amçıq', 'sik', 'göt', 'pıçı', 'sikş', 'fahişə', 'azğın', 'yalana', 'ciplaq', 'sikiş', 'erotik', 'seviş', 'pussy', 'dick', 'cock', 'boobs', 'tits', 'anal', 'milf', 'hardcore', 'bcs', 'azgın', 'bakire'
+];
+
+export function isLikelyExplicit(url: string, title?: string, snippet?: string): boolean {
+  try {
+    const u = url.toLowerCase();
+    if (blockedHostPatterns.some(re => re.test(u))) return true;
+    const t = (title || '').toLowerCase();
+    const s = (snippet || '').toLowerCase();
+    if (explicitKeywords.some(kw => u.includes(kw) || t.includes(kw) || s.includes(kw))) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
 const allowedVideoHosts = [
   'www.youtube.com', 'youtube.com', 'm.youtube.com', 'youtu.be', 'vimeo.com', 'www.vimeo.com', 'www.dailymotion.com', 'dailymotion.com'
 ];
@@ -63,7 +79,7 @@ async function callSerperApi(
   endpoint: 'search' | 'images' | 'videos' | 'places' | 'news' | 'shopping' | 'autocomplete',
   query: string,
   num: number,
-  opts: { gl?: string; hl?: string; page?: number } = {}
+  opts: { gl?: string; hl?: string; page?: number; safeSearch?: boolean } = {}
 ) {
   if (!SERPER_API_KEY) {
     console.error("Serper API key not found. Will try proxy fallbacks.");
@@ -85,7 +101,14 @@ async function callSerperApi(
           'X-API-KEY': SERPER_API_KEY,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ q: query, num, page: (opts.page || 1), ...(glLower ? { gl: glLower } : {}), ...(hlLower ? { hl: hlLower } : {}), }),
+        body: JSON.stringify({
+          q: query,
+          num,
+          page: (opts.page || 1),
+          ...(opts.gl ? { gl: opts.gl.toLowerCase() } : {}),
+          ...(opts.hl ? { hl: opts.hl.toLowerCase() } : {}),
+          ...(opts.safeSearch ? { safeSearch: true } : {}),
+        }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -124,6 +147,7 @@ async function callSerperApi(
       num,
       ...(opts.gl ? { gl: opts.gl.toLowerCase() } : {}),
       ...(opts.hl ? { hl: opts.hl.toLowerCase() } : {}),
+      ...(opts.safeSearch ? { safeSearch: true } : {}),
     } as any;
     const proxyEndpoints = [
       '/api/serper-proxy',
@@ -142,7 +166,7 @@ async function callSerperApi(
           serperCache.set(key, { data, expires: now + SERPER_CACHE_TTL_MS });
           return data;
         }
-      } catch {}
+      } catch { }
     }
     return null;
   })();
@@ -165,7 +189,7 @@ export function detectLocaleForSearch(): { hl: string; gl: string } {
       hl = (langPart || 'en').toLowerCase();
       gl = (regionPart || 'US').toLowerCase();
     }
-  } catch {}
+  } catch { }
   return { hl, gl };
 }
 
@@ -173,7 +197,7 @@ export function detectLocaleForSearch(): { hl: string; gl: string } {
 export interface SerperOrganicResult { title: string; link: string; snippet: string; date?: string }
 export interface SerperResponse { organic: SerperOrganicResult[] }
 
-export async function searchWeb(query: string, num = 8, opts?: { gl?: string; hl?: string; page?: number }): Promise<SerperResponse | null> {
+export async function searchWeb(query: string, num = 8, opts?: { gl?: string; hl?: string; page?: number; safeSearch?: boolean }): Promise<SerperResponse | null> {
   const data = await callSerperApi('search', query, num, opts);
   if (!data) return null;
   const organic = (data.organic || []).map((r: any) => ({
@@ -186,7 +210,7 @@ export async function searchWeb(query: string, num = 8, opts?: { gl?: string; hl
 }
 
 // Autocomplete suggestions via Serper
-export async function suggestAutocomplete(q: string, opts?: { hl?: string; gl?: string }): Promise<string[]> {
+export async function suggestAutocomplete(q: string, opts?: { hl?: string; gl?: string; safeSearch?: boolean }): Promise<string[]> {
   const { hl, gl } = opts || detectLocaleForSearch();
   try {
     const data = await callSerperApi('autocomplete', q, 10, { hl, gl });
@@ -203,13 +227,13 @@ export async function suggestAutocomplete(q: string, opts?: { hl?: string; gl?: 
   }
 }
 
-export async function searchImagesAndVideos(query: string, maxImages = 6, maxVideos = 3): Promise<{ images: string[]; videos: string[] }> {
+export async function searchImagesAndVideos(query: string, maxImages = 6, maxVideos = 3, opts?: { safeSearch?: boolean }): Promise<{ images: string[]; videos: string[] }> {
   // If explicitly configured, use Google CSE as primary provider for visuals
   if (USE_CSE_VISUALS && CSE_KEY && CSE_CX) {
     try {
-      const imgUrl = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(query)}&searchType=image&num=${Math.min(Math.max(maxImages,1),10)}&safe=active`;
+      const imgUrl = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(query)}&searchType=image&num=${Math.min(Math.max(maxImages, 1), 10)}&safe=${opts?.safeSearch ? 'active' : 'off'}`;
       const vidQ = `${query} site:youtube.com/watch`;
-      const vidUrl = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(vidQ)}&num=${Math.min(Math.max(maxVideos,1),10)}&safe=active`;
+      const vidUrl = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(vidQ)}&num=${Math.min(Math.max(maxVideos, 1), 10)}&safe=${opts?.safeSearch ? 'active' : 'off'}`;
       const [ir, vr] = await Promise.all([fetch(imgUrl), fetch(vidUrl)]);
       const [id, vd] = await Promise.all([ir.json(), vr.json()]);
       const imgSet = new Set<string>(
@@ -225,14 +249,14 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
       const imgs: string[] = Array.from(imgSet).slice(0, maxImages);
       const vids: string[] = Array.from(vidSet).slice(0, maxVideos);
       return { images: imgs, videos: vids };
-    } catch {}
+    } catch { }
   }
   const { hl, gl } = detectLocaleForSearch();
   const hl2 = (hl || 'en').toLowerCase();
   const gl2 = (gl || 'us').toLowerCase();
   const [imageResults, videoResults] = await Promise.all([
-    callSerperApi('images', query, maxImages, { gl: gl2, hl: hl2 }),
-    callSerperApi('videos', query, maxVideos, { gl: gl2, hl: hl2 }),
+    callSerperApi('images', query, maxImages, { gl: gl2, hl: hl2, safeSearch: opts?.safeSearch }),
+    callSerperApi('videos', query, maxVideos, { gl: gl2, hl: hl2, safeSearch: opts?.safeSearch }),
   ]);
 
   const imageItems: any[] = (imageResults?.images || imageResults?.image_results || []) as any[];
@@ -248,7 +272,7 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
   // Fallback: try general search endpoint to harvest images/videos if empty
   if (images.length === 0 || videos.length === 0) {
     try {
-      const alt = await callSerperApi('search', query, Math.max(maxImages, maxVideos), { gl: gl2, hl: hl2 });
+      const alt = await callSerperApi('search', query, Math.max(maxImages, maxVideos), { gl: gl2, hl: hl2, safeSearch: opts?.safeSearch });
       if (alt) {
         if (images.length === 0) {
           const altImgs: any[] = (alt.images || alt.image_results || alt.inlineImages || alt.inline_images || []);
@@ -265,7 +289,7 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
           if (altVideoUrls.length) videos = altVideoUrls.filter(isSafeVideoUrl).slice(0, maxVideos);
         }
       }
-    } catch {}
+    } catch { }
   }
 
   // Final fallback: Google CSE (if configured and explicitly enabled)
@@ -274,7 +298,7 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
   if (USE_CSE_VISUALS && images.length < minImg && CSE_KEY && CSE_CX) {
     try {
       const start = 1;
-      const url = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(query)}&searchType=image&num=${Math.min(Math.max(maxImages,1),10)}&safe=active`;
+      const url = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(query)}&searchType=image&num=${Math.min(Math.max(maxImages, 1), 10)}&safe=${opts?.safeSearch ? 'active' : 'off'}`;
       const resp = await fetch(url);
       const data = await resp.json();
       const items: any[] = data.items || [];
@@ -283,12 +307,12 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
         const merged = new Set<string>([...images, ...cseImages]);
         images = Array.from(merged).slice(0, maxImages);
       }
-    } catch {}
+    } catch { }
   }
   if (USE_CSE_VISUALS && videos.length < minVid && CSE_KEY && CSE_CX) {
     try {
       const q = `${query} site:youtube.com/watch`;
-      const url = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(q)}&num=${Math.min(Math.max(maxVideos,1),10)}&safe=active`;
+      const url = `https://www.googleapis.com/customsearch/v1?key=${CSE_KEY}&cx=${CSE_CX}&q=${encodeURIComponent(q)}&num=${Math.min(Math.max(maxVideos, 1), 10)}&safe=${opts?.safeSearch ? 'active' : 'off'}`;
       const resp = await fetch(url);
       const data = await resp.json();
       const items: any[] = data.items || [];
@@ -297,7 +321,7 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
         const merged = new Set<string>([...videos, ...cseVideos]);
         videos = Array.from(merged).slice(0, maxVideos);
       }
-    } catch {}
+    } catch { }
   }
   return { images, videos };
 }
@@ -319,13 +343,13 @@ export async function searchPlaces(query: string, num = 8, opts?: { gl?: string;
   }));
 }
 
-export const searchNews = async (query: string, num = 10, opts?: { hl?: string; gl?: string }): Promise<NewsArticle[]> => {
+export const searchNews = async (query: string, num = 10, opts?: { hl?: string; gl?: string; safeSearch?: boolean }): Promise<NewsArticle[]> => {
   const newsDataPromise = fetchNewsFromNewsData(query, { lang: opts?.hl, country: opts?.gl });
   const loc = detectLocaleForSearch();
   const hl = opts?.hl ?? loc.hl;
   const gl = opts?.gl ?? loc.gl;
   try {
-    const serperData = await callSerperApi('news', query, num, { hl, gl });
+    const serperData = await callSerperApi('news', query, num, { hl, gl, safeSearch: opts?.safeSearch });
     const serperItems: any[] = serperData?.news || serperData?.news_results || serperData?.newsResults || [];
     const serperArticles: NewsArticle[] = serperItems.map((item: any) => ({
       id: item.link || item.title,
@@ -341,7 +365,7 @@ export const searchNews = async (query: string, num = 10, opts?: { hl?: string; 
     const newsDataArticles = await fetchNewsFromNewsData(query, { lang: hl, country: gl });
     const combined = [...serperArticles, ...newsDataArticles];
     const unique = Array.from(new Map(combined.map(item => [item.url, item])).values());
-        return unique.slice(0, num);
+    return unique.slice(0, num);
   } catch (e) {
     console.error('Serper news failed:', e);
     // In case of Serper failure, still try to return NewsData results
@@ -354,10 +378,10 @@ export const searchNews = async (query: string, num = 10, opts?: { hl?: string; 
     }
   }
 };
-export const searchShopping = async (query: string, num = 10): Promise<ShoppingProduct[]> => {
+export const searchShopping = async (query: string, num = 10, opts?: { safeSearch?: boolean }): Promise<ShoppingProduct[]> => {
   const { hl, gl } = detectLocaleForSearch();
   try {
-    const data = await callSerperApi('shopping', query, num, { hl, gl });
+    const data = await callSerperApi('shopping', query, num, { hl, gl, safeSearch: opts?.safeSearch });
     const items: any[] = data?.shopping || data?.shopping_results || data?.products || [];
     return items.map((item: any) => ({
       title: item.title,

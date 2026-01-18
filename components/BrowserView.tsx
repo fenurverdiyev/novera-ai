@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { createPortal } from 'react-dom';
 import { SearchIcon, LoadingSpinner, MicrophoneIcon, CameraIcon, CloseIcon, ArrowLeftIcon, MaximizeIcon, MinimizeIcon, MenuIcon, PlusIcon } from './Icons';
 import { ArrowRightIcon, RefreshIcon } from './BrowserIcons';
-import { suggestAutocomplete, detectLocaleForSearch, searchImagesAndVideos, searchNews, searchShopping, searchWeb } from '../services/searchService';
+import { suggestAutocomplete, detectLocaleForSearch, searchImagesAndVideos, searchNews, searchShopping, searchWeb, isLikelyExplicit } from '../services/searchService';
 import { answerWithGroundedSearch, streamChatQuery } from '../services/geminiService';
 import { Logo } from './Logo';
 import { HeroSearchBar } from './HeroSearchBar';
@@ -110,7 +110,7 @@ const toReader = (u: string): string => {
 const isProbablyUrl = (val: string): boolean => {
   const s = (val || '').trim();
   if (!s) return false;
-  try { new URL(s); return true; } catch {}
+  try { new URL(s); return true; } catch { }
   // bare domain or www.
   if (/^www\.[^\s/]+\.[^\s]{2,}/i.test(s)) return true;
   if (/^[^\s/]+\.[a-z]{2,}(\/.*)?$/i.test(s)) return true;
@@ -248,6 +248,9 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   const [videoUrls, setVideoUrls] = useState<string[]>([]);
   const [newsItems, setNewsItems] = useState<NewsArticle[]>([]);
   const [products, setProducts] = useState<ShoppingProduct[]>([]);
+  const [safeSearchDropdownOpen, setSafeSearchDropdownOpen] = useState(false);
+  const [unblurredItems, setUnblurredItems] = useState<Set<string>>(new Set());
+  const [blurConfirmation, setBlurConfirmation] = useState<{ url: string; onConfirm: () => void } | null>(null);
   const [overlayUrl, setOverlayUrl] = useState<string | null>(null);
   const [overlaySearch, setOverlaySearch] = useState<string>('');
   const [overlayHistory, setOverlayHistory] = useState<string[]>([]);
@@ -299,7 +302,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       const raw = localStorage.getItem('novEra.search.history');
       const arr = raw ? JSON.parse(raw) : [];
       if (Array.isArray(arr)) setHbHistory(arr as string[]);
-    } catch {}
+    } catch { }
   }, []);
 
   // Incognito results mode (for desktop header suggestions gating)
@@ -348,7 +351,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
           return prev.map(t => t.id === id ? { ...t, title: q } : t);
         });
       }
-    } catch {}
+    } catch { }
     if (isProbablyUrl(q)) {
       openOverlay(normalizeUrl(q));
     } else {
@@ -363,7 +366,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         if (next.length > 20) next = next.slice(0, 20);
         localStorage.setItem('novEra.search.history', JSON.stringify(next));
         setHbHistory(next);
-      } catch {}
+      } catch { }
     }
     setHbQuery('');
     setHbSuggestions([]);
@@ -433,7 +436,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
 
   const makeNewTab = useCallback((initialUrl: string | null): OverlayTab => {
     const u = initialUrl || null;
-    const title = u ? getHost(u).replace(/^www\./,'') : 'Yeni Tab';
+    const title = u ? getHost(u).replace(/^www\./, '') : 'Yeni Tab';
     return { id: Math.random().toString(36).slice(2), url: u, title, history: u ? [u] : [], historyIndex: u ? 0 : -1 };
   }, []);
 
@@ -442,7 +445,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       if (prev.length > 0) return prev;
       const nt = makeNewTab(null);
       setActiveTabIdNormal(nt.id);
-      try { const k = tabKey(false, nt.id); setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() })); } catch {}
+      try { const k = tabKey(false, nt.id); setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() })); } catch { }
       return [nt];
     });
   }, [makeNewTab, tabKey, defaultTabSearch]);
@@ -474,7 +477,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   }
 
   const openNewTab = useCallback((initialUrl: string | null = null) => {
-    try { saveCurrentTabSearch(); } catch {}
+    try { saveCurrentTabSearch(); } catch { }
     const t = makeNewTab(initialUrl);
     if (overlayIncognito) {
       setTabsIncog(prev => [...prev, t]);
@@ -488,7 +491,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     try {
       const k = tabKey(overlayIncognito, t.id);
       setTabSearchStore(prev => (prev[k] ? prev : { ...prev, [k]: defaultTabSearch() }));
-    } catch {}
+    } catch { }
     setOverlayShellOpen(true);
     setShowTabSwitcher(false);
   }, [overlayIncognito, makeNewTab, setActiveTabCommon, saveCurrentTabSearch, tabKey, defaultTabSearch]);
@@ -496,7 +499,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   // Create tab without opening overlay (used on home header + button)
   const openNewTabLocal = useCallback(() => {
     // Save the current tab's search BEFORE switching active tab
-    try { saveCurrentTabSearch(); } catch {}
+    try { saveCurrentTabSearch(); } catch { }
     const t = makeNewTab(null);
     if (overlayIncognito) {
       setTabsIncog(prev => [...prev, t]);
@@ -511,7 +514,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       const k = tabKey(overlayIncognito, t.id);
       setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() }));
       applySearchState(defaultTabSearch());
-    } catch {}
+    } catch { }
     // Return to lobby view (no overlay); keep current mode (normal/incognito)
     setOverlayShellOpen(false);
     setOverlayChromeHidden(false);
@@ -520,7 +523,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
 
   // Listen for global request to create a new tab (from Sidebar '+')
   useEffect(() => {
-    const onNewTab = () => { try { openNewTabLocal(); } catch {} };
+    const onNewTab = () => { try { openNewTabLocal(); } catch { } };
     window.addEventListener('nov-era-new-tab' as any, onNewTab as any);
     return () => window.removeEventListener('nov-era-new-tab' as any, onNewTab as any);
   }, [openNewTabLocal]);
@@ -528,7 +531,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   // From WebView overlay, opening a new tab should return to the same mode's lobby
   const openHeaderNewTabFromOverlay = useCallback(() => {
     // Save the current tab's search BEFORE switching active tab
-    try { saveCurrentTabSearch(); } catch {}
+    try { saveCurrentTabSearch(); } catch { }
     const t = makeNewTab(null);
     if (overlayIncognito) {
       setTabsIncog(prev => [...prev, t]);
@@ -542,7 +545,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       const k = tabKey(overlayIncognito, t.id);
       setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() }));
       applySearchState(defaultTabSearch());
-    } catch {}
+    } catch { }
     // close overlay shell and reset state (stay in the same mode)
     setActiveTabCommon(t);
     setOverlayShellOpen(false);
@@ -602,22 +605,22 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
 
   const switchToTab = useCallback((id: string) => {
     if (overlayIncognito) {
-      try { saveCurrentTabSearch(); } catch {}
+      try { saveCurrentTabSearch(); } catch { }
       setActiveTabIdIncog(id);
       const t = tabsIncog.find(x => x.id === id) || null;
       setActiveTabCommon(t);
       // If the selected tab has content, show overlay; otherwise lobby
       setOverlayShellOpen(!!(t && t.url));
       setOverlayChromeHidden(false);
-      try { const k = tabKey(true, id); applySearchState(tabSearchStore[k]); } catch {}
+      try { const k = tabKey(true, id); applySearchState(tabSearchStore[k]); } catch { }
     } else {
-      try { saveCurrentTabSearch(); } catch {}
+      try { saveCurrentTabSearch(); } catch { }
       setActiveTabIdNormal(id);
       const t = tabsNormal.find(x => x.id === id) || null;
       setActiveTabCommon(t);
       setOverlayShellOpen(!!(t && t.url));
       setOverlayChromeHidden(false);
-      try { const k = tabKey(false, id); applySearchState(tabSearchStore[k]); } catch {}
+      try { const k = tabKey(false, id); applySearchState(tabSearchStore[k]); } catch { }
     }
   }, [overlayIncognito, tabsIncog, tabsNormal, setActiveTabCommon, saveCurrentTabSearch, tabKey, tabSearchStore, applySearchState]);
   // AI analysis state
@@ -635,7 +638,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   // Hold images selected by user (camera/gallery) until they press Search
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [fromIncogResults, setFromIncogResults] = useState<boolean>(false);
-  useEffect(() => { try { setIncogResultsActive(!!fromIncogResults); } catch {} }, [fromIncogResults]);
+  useEffect(() => { try { setIncogResultsActive(!!fromIncogResults); } catch { } }, [fromIncogResults]);
   // AI analysis attachments: inputs
   const aiFileInputRef = useRef<HTMLInputElement>(null);
   const aiGalleryInputRef = useRef<HTMLInputElement>(null);
@@ -649,7 +652,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       setPendingImages((prev) => [...prev, base64Image]);
     };
     reader.readAsDataURL(file);
-    try { (event.target as HTMLInputElement).value = ''; } catch {}
+    try { (event.target as HTMLInputElement).value = ''; } catch { }
   };
   // Derive a short text query from selected images (no UI streaming)
   const extractQueryFromImages = useCallback(async (fallbackText = 'Bu şəkil haqqında məlumat') => {
@@ -693,7 +696,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     const quickFallback = (host.includes('youtube.com') || host === 'youtu.be') && embedCandidate === url;
     setOverlayUrl(url);
     setOverlayShellOpen(true);
-    try { window.scrollTo({ top: 0, behavior: 'auto' as any }); } catch { try { window.scrollTo(0, 0); } catch {} }
+    try { window.scrollTo({ top: 0, behavior: 'auto' as any }); } catch { try { window.scrollTo(0, 0); } catch { } }
     // Update current tab model
     if (overlayIncognito) {
       setTabsIncog(prev => {
@@ -706,7 +709,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         }
         const base = existing.historyIndex >= 0 ? existing.history.slice(0, existing.historyIndex + 1) : existing.history.slice();
         const history = [...base, url];
-        const updated = { ...existing, url, title: getHost(url).replace(/^www\./,''), history, historyIndex: history.length - 1 };
+        const updated = { ...existing, url, title: getHost(url).replace(/^www\./, ''), history, historyIndex: history.length - 1 };
         return prev.map(t => t.id === existing.id ? updated : t);
       });
     } else {
@@ -720,7 +723,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         }
         const base = existing.historyIndex >= 0 ? existing.history.slice(0, existing.historyIndex + 1) : existing.history.slice();
         const history = [...base, url];
-        const updated = { ...existing, url, title: getHost(url).replace(/^www\./,''), history, historyIndex: history.length - 1 };
+        const updated = { ...existing, url, title: getHost(url).replace(/^www\./, ''), history, historyIndex: history.length - 1 };
         return prev.map(t => t.id === existing.id ? updated : t);
       });
     }
@@ -743,7 +746,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   };
   const closeOverlay = () => {
     // Preserve current tab's search snapshot
-    try { saveCurrentTabSearch(); } catch {}
+    try { saveCurrentTabSearch(); } catch { }
     // Clear overlay chrome state
     setOverlayUrl(null);
     setOverlayHistory([]);
@@ -765,9 +768,9 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
           return prev.map(t => t.id === id ? { ...t, url: null } : t);
         });
       }
-    } catch {}
+    } catch { }
     if (overlayFallbackTimerRef.current) { window.clearTimeout(overlayFallbackTimerRef.current); overlayFallbackTimerRef.current = null; }
-    try { onOverlayClosed?.(); } catch {}
+    try { onOverlayClosed?.(); } catch { }
   };
   const navigateOverlay = (url: string) => {
     if (!url) return;
@@ -781,7 +784,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     });
     setOverlayUrl(url);
     setOverlayKey(x => x + 1);
-    try { window.scrollTo({ top: 0, behavior: 'auto' as any }); } catch { try { window.scrollTo(0, 0); } catch {} }
+    try { window.scrollTo({ top: 0, behavior: 'auto' as any }); } catch { try { window.scrollTo(0, 0); } catch { } }
     overlayLoadedRef.current = false;
     setOverlayNotice(null);
     // Always use Web View (proxy) for subsequent navigations as well
@@ -794,7 +797,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         if (!existing) return prev;
         const base = existing.historyIndex >= 0 ? existing.history.slice(0, existing.historyIndex + 1) : existing.history.slice();
         const history = [...base, url];
-        const updated = { ...existing, url, title: getHost(url).replace(/^www\./,''), history, historyIndex: history.length - 1 };
+        const updated = { ...existing, url, title: getHost(url).replace(/^www\./, ''), history, historyIndex: history.length - 1 };
         return prev.map(t => t.id === existing.id ? updated : t);
       });
     } else {
@@ -804,7 +807,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         if (!existing) return prev;
         const base = existing.historyIndex >= 0 ? existing.history.slice(0, existing.historyIndex + 1) : existing.history.slice();
         const history = [...base, url];
-        const updated = { ...existing, url, title: getHost(url).replace(/^www\./,''), history, historyIndex: history.length - 1 };
+        const updated = { ...existing, url, title: getHost(url).replace(/^www\./, ''), history, historyIndex: history.length - 1 };
         return prev.map(t => t.id === existing.id ? updated : t);
       });
     }
@@ -897,8 +900,8 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   // If parent asks to open a URL, open overlay immediately
   useEffect(() => {
     if (openOverlayUrl) {
-      try { openOverlay(openOverlayUrl); } catch {}
-      try { onOpenedOverlay?.(); } catch {}
+      try { openOverlay(openOverlayUrl); } catch { }
+      try { onOpenedOverlay?.(); } catch { }
     }
   }, [openOverlayUrl]);
   // When overlay is open, lock background scroll
@@ -914,21 +917,21 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
           bodyOverflowPrevRef.current = null;
         }
       }
-    } catch {}
+    } catch { }
     return () => {
       try {
         if (bodyOverflowPrevRef.current != null) {
           document.body.style.overflow = bodyOverflowPrevRef.current;
           bodyOverflowPrevRef.current = null;
         }
-      } catch {}
+      } catch { }
     };
   }, [overlayShellOpen, overlayUrl]);
 
   // Close page (hamburger) menu whenever overlay opens
   useEffect(() => {
     if (overlayShellOpen || overlayUrl) {
-      try { setPageMenuOpen(false); } catch {}
+      try { setPageMenuOpen(false); } catch { }
     }
   }, [overlayShellOpen, overlayUrl]);
   // Open Incognito mode when requested by parent (do NOT auto-open WebView)
@@ -945,10 +948,10 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         if (prev.length > 0) return prev;
         const nt = makeNewTab(null);
         setActiveTabIdIncog(nt.id);
-        try { const k = tabKey(true, nt.id); setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() })); } catch {}
+        try { const k = tabKey(true, nt.id); setTabSearchStore(prev => ({ ...prev, [k]: defaultTabSearch() })); } catch { }
         return [nt];
       });
-      try { onOpenedIncognito?.(); } catch {}
+      try { onOpenedIncognito?.(); } catch { }
     }
   }, [openIncognito]);
   // ESC toggle fullscreen (overlay chrome hidden)
@@ -995,17 +998,17 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     try {
       setAuthEmail(localStorage.getItem('nov-era-auth'));
       setAvatar(localStorage.getItem('nov-era-avatar'));
-    } catch {}
+    } catch { }
   }, []);
 
   const dispatchNav = (view: string) => {
-    try { window.dispatchEvent(new CustomEvent('nov-era-nav' as any, { detail: view })); } catch {}
+    try { window.dispatchEvent(new CustomEvent('nov-era-nav' as any, { detail: view })); } catch { }
   };
   const dispatchClearAll = () => {
-    try { window.dispatchEvent(new Event('nov-era-clear-all' as any)); } catch {}
+    try { window.dispatchEvent(new Event('nov-era-clear-all' as any)); } catch { }
   };
   const dispatchClearRecent = (minutes: number) => {
-    try { window.dispatchEvent(new CustomEvent('nov-era-clear-recent' as any, { detail: minutes })); } catch {}
+    try { window.dispatchEvent(new CustomEvent('nov-era-clear-recent' as any, { detail: minutes })); } catch { }
   };
   // Clear ALL search history (for Browser search bar history)
   const clearSearchHistoryAll = () => {
@@ -1014,13 +1017,13 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       localStorage.removeItem('novEra.search.lastQuery');
       localStorage.removeItem('novEra.search.lastPage');
       window.dispatchEvent(new Event('nov-era-search-history-cleared' as any));
-    } catch {}
+    } catch { }
   };
   // Overlay theme for incognito/browser overlay background
   const [overlayTheme, setOverlayTheme] = useState<'system' | 'light' | 'dark'>(() => {
     try { return (localStorage.getItem('nov-era-overlay-theme') as any) || 'system'; } catch { return 'system'; }
   });
-  useEffect(() => { try { localStorage.setItem('nov-era-overlay-theme', overlayTheme); } catch {} }, [overlayTheme]);
+  useEffect(() => { try { localStorage.setItem('nov-era-overlay-theme', overlayTheme); } catch { } }, [overlayTheme]);
   const isLightOverlay = useMemo(() => {
     try {
       const sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1058,7 +1061,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
           return prev.map(t => t.id === id ? { ...t, title: qStr } : t);
         });
       }
-    } catch {}
+    } catch { }
     // Note: If CSE creds yoxdursa, Serper fallback istifadə olunacaq
     setLoading(true);
     setError(null);
@@ -1079,19 +1082,20 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       const cseRemain = Math.max(0, RESULTS_PER_PAGE - cseFirstNum);
       const cseStart2 = cseStart1 + cseFirstNum;
       const cseSecondNum = Math.min(10, cseRemain);
-      const safeParam = safeSearchMode === 'off' ? 'off' : 'active';
+      const safeParam = safeSearchMode === 'filter' ? 'active' : 'off';
       const webUrl1 = useCSE ? `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${CX}&q=${encodeURIComponent(qStr)}&start=${cseStart1}&num=${cseFirstNum}&safe=${safeParam}` : '';
       const webUrl2 = useCSE && cseSecondNum > 0 ? `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${CX}&q=${encodeURIComponent(qStr)}&start=${cseStart2}&num=${cseSecondNum}&safe=${safeParam}` : '';
       const imageUrl = useCSE ? `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${CX}&q=${encodeURIComponent(qStr)}&searchType=image&num=8&safe=${safeParam}` : '';
 
+      const safeSearch = safeSearchMode === 'filter';
       const [cse1Resp, cse2Resp, imgResp, visuals, nData, sData, serperData] = await Promise.all([
         useCSE ? fetch(webUrl1) : Promise.resolve(null as any),
         useCSE && webUrl2 ? fetch(webUrl2).catch(() => null) : Promise.resolve(null),
         useCSE ? fetch(imageUrl).catch(() => null) : Promise.resolve(null),
-        searchImagesAndVideos(qStr, 100, 30).catch(() => ({ images: [], videos: [] })),
-        searchNews(qStr, 50).catch(() => [] as NewsArticle[]),
-        searchShopping(qStr, 24).catch(() => [] as ShoppingProduct[]),
-        searchWeb(qStr, RESULTS_PER_PAGE, { ...loc, page: pageIndex }).catch(() => null),
+        searchImagesAndVideos(qStr, 100, 30, { safeSearch }).catch(() => ({ images: [], videos: [] })),
+        searchNews(qStr, 50, { safeSearch }).catch(() => [] as NewsArticle[]),
+        searchShopping(qStr, 24, { safeSearch }).catch(() => [] as ShoppingProduct[]),
+        searchWeb(qStr, RESULTS_PER_PAGE, { ...loc, page: pageIndex, safeSearch }).catch(() => null),
       ]);
 
       // Prefer Serper results for richer coverage
@@ -1131,7 +1135,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       try {
         localStorage.setItem('novEra.search.lastQuery', qStr);
         localStorage.setItem('novEra.search.lastPage', String(pageIndex));
-      } catch {}
+      } catch { }
       // Update results history
       if (!restoringRef.current) {
         if (currentQueryRef.current !== qStr) {
@@ -1148,7 +1152,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         }
       }
       setError(null);
-      
+
       // Image results
       if (imgResp && imgResp.ok) {
         const imgData: ImageSearchResponse = await imgResp.json();
@@ -1174,12 +1178,19 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     } finally {
       setLoading(false);
     }
-  }, [query, overlayIncognito, activeTabIdIncog, activeTabIdNormal]);
+  }, [query, overlayIncognito, activeTabIdIncog, activeTabIdNormal, safeSearchMode]);
 
   // Auto-persist current tab's search state on changes
   useEffect(() => {
-    try { saveCurrentTabSearch(); } catch {}
+    try { saveCurrentTabSearch(); } catch { }
   }, [query, page, results, imageResults, videoUrls, newsItems, products, resultsHistory, resultsIndex, forwardFromLobby, activeTab, hasNextPage, error, fromIncogResults, previewUrl, overlayIncognito, activeTabIdIncog, activeTabIdNormal]);
+
+  // Trigger immediate re-search if safeSearchMode changes to/from 'filter'
+  useEffect(() => {
+    if (results.length > 0 && !loading) {
+      doSearch(page);
+    }
+  }, [safeSearchMode]);
 
   // Run AI analysis (shared)
   // Helper: compress data URL image on client (max 1280px, q=0.82 by default)
@@ -1377,7 +1388,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       setIsListening(false);
     }
   };
-  const stopListening = () => { try { recognitionRef.current?.stop(); } catch {} setIsListening(false); };
+  const stopListening = () => { try { recognitionRef.current?.stop(); } catch { } setIsListening(false); };
   const toggleListening = () => { if (isListening) stopListening(); else startListening(); };
 
   // Upload handlers
@@ -1418,7 +1429,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
 
   // Helper: go back to Incognito home view
   const openIncognitoHome = () => {
-    try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch {}
+    try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch { }
   };
 
   // Global back/forward: if overlay is open use overlay history, else paginate results
@@ -1539,7 +1550,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   const [mobileTabOverflowOpen, setMobileTabOverflowOpen] = useState(false);
 
   return (
-    <div className={`relative ${ (overlayShellOpen || overlayUrl || overlayIncognito) ? 'p-0' : 'p-4 md:p-6' } min-h-full text-text-main bg-bg-main/80 ${ (overlayShellOpen || overlayUrl) ? '' : 'backdrop-blur-sm' }`} style={{ paddingTop: (!isMobile && showDesktopHeader) ? (headerHeight + 8) : undefined }}>
+    <div className={`relative ${(overlayShellOpen || overlayUrl || overlayIncognito) ? 'p-0' : 'p-4 md:p-6'} min-h-full text-text-main bg-bg-main/80 ${(overlayShellOpen || overlayUrl) ? '' : 'backdrop-blur-sm'}`} style={{ paddingTop: (!isMobile && showDesktopHeader) ? (headerHeight + 8) : undefined }}>
       {isMobile && !(overlayShellOpen || overlayUrl) && (
         <>
           <div className="fixed top-2 left-2 z-[20000] pointer-events-auto">
@@ -1567,7 +1578,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 <span>👤</span>
                 <span>Profil</span>
               </button>
-              <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch {} setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
+              <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch { } setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
                 <span>🕶️</span>
                 <span>Anonim Tab</span>
               </button>
@@ -1601,7 +1612,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
               <div className="my-1 h-px bg-white/10" />
               <div className="px-4 py-2 text-xs text-white/70">Görünüş</div>
               <div className="px-3 pb-2 flex items-center gap-2">
-                {([ {id:'light',label:'Ağ rejim'}, {id:'dark',label:'Tünd rejim'}, {id:'system',label:'Sistem'} ] as const).map(opt => (
+                {([{ id: 'light', label: 'Ağ rejim' }, { id: 'dark', label: 'Tünd rejim' }, { id: 'system', label: 'Sistem' }] as const).map(opt => (
                   <button key={opt.id}
                     onClick={() => { setOverlayTheme(opt.id as any); }}
                     className={`px-3 py-1.5 rounded-full text-xs border ${overlayTheme === opt.id ? 'bg-white/20 text-white border-white/40' : 'bg-white/5 text-white/80 hover:bg-white/10 border-white/20'}`}
@@ -1626,7 +1637,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                   <span>👤</span>
                   <span>Profil</span>
                 </button>
-                <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch {} setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
+                <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch { } setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 flex items-center gap-2">
                   <span>🕶️</span>
                   <span>Anonim Tab</span>
                 </button>
@@ -1662,7 +1673,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 <div className="my-1 h-px bg-white/10" />
                 <div className="px-4 py-2 text-xs text-white/70">Görünüş</div>
                 <div className="px-3 pb-2 flex items-center gap-2">
-                  {([ {id:'light',label:'Ağ rejim'}, {id:'dark',label:'Tünd rejim'}, {id:'system',label:'Sistem'} ] as const).map(opt => (
+                  {([{ id: 'light', label: 'Ağ rejim' }, { id: 'dark', label: 'Tünd rejim' }, { id: 'system', label: 'Sistem' }] as const).map(opt => (
                     <button key={opt.id}
                       onClick={() => { setOverlayTheme(opt.id as any); }}
                       className={`px-3 py-1.5 rounded-full text-xs border ${overlayTheme === opt.id ? 'bg-white/20 text-white border-white/40' : 'bg-white/5 text-white/80 hover:bg-white/10 border-white/20'}`}
@@ -1682,26 +1693,30 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
               {/* Row 1: Tab strip (moved above omnibox) */}
               <div className="order-1 mt-0 flex items-center gap-2 rounded-2xl backdrop-blur-2xl bg-white/8 border border-white/15 shadow-md px-2 py-1.5">
                 <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pr-2">
-                  {(() => { const list = overlayIncognito ? tabsIncog : tabsNormal; const activeId = overlayIncognito ? activeTabIdIncog : activeTabIdNormal; return list.map(t => { const active = t.id === activeId; const fav = t.url ? `https://www.google.com/s2/favicons?domain=${getHost(t.url)}&sz=32` : ''; return (
-                    <div key={t.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-t-xl border ${active ? 'bg-white/10 border-white/20' : 'bg-white/5 hover:bg-white/10 border-white/10'}`}>
-                      <button onClick={() => switchToTab(t.id)} className="flex items-center gap-2 min-w-0">
-                        {t.url ? (
-                          <img src={fav} className="w-4 h-4" />
-                        ) : (
-                          <div className="relative w-4 h-4 rounded-full bg-white/5 border border-white/15 flex items-center justify-center">
-                            {active && isBusy && (<div className="absolute inset-0 rounded-full border border-white/30 border-t-white animate-spin"></div>)}
-                            {overlayIncognito ? (
-                              <span className="text-[10px] leading-4 font-semibold text-white/90">🕶️</span>
+                  {(() => {
+                    const list = overlayIncognito ? tabsIncog : tabsNormal; const activeId = overlayIncognito ? activeTabIdIncog : activeTabIdNormal; return list.map(t => {
+                      const active = t.id === activeId; const fav = t.url ? `https://www.google.com/s2/favicons?domain=${getHost(t.url)}&sz=32` : ''; return (
+                        <div key={t.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-t-xl border ${active ? 'bg-white/10 border-white/20' : 'bg-white/5 hover:bg-white/10 border-white/10'}`}>
+                          <button onClick={() => switchToTab(t.id)} className="flex items-center gap-2 min-w-0">
+                            {t.url ? (
+                              <img src={fav} className="w-4 h-4" />
                             ) : (
-                              <span className="text-[10px] leading-4 font-semibold bg-gradient-to-r from-cyan-200 via-white to-white text-transparent bg-clip-text">N</span>
+                              <div className="relative w-4 h-4 rounded-full bg-white/5 border border-white/15 flex items-center justify-center">
+                                {active && isBusy && (<div className="absolute inset-0 rounded-full border border-white/30 border-t-white animate-spin"></div>)}
+                                {overlayIncognito ? (
+                                  <span className="text-[10px] leading-4 font-semibold text-white/90">🕶️</span>
+                                ) : (
+                                  <span className="text-[10px] leading-4 font-semibold bg-gradient-to-r from-cyan-200 via-white to-white text-transparent bg-clip-text">N</span>
+                                )}
+                              </div>
                             )}
-                          </div>
-                        )}
-                        <span className="text-xs text-white/90 truncate max-w-[18ch]">{t.title || 'Yeni Tab'}</span>
-                      </button>
-                      <button onClick={() => closeTabById(t.id)} className="text-white/70 hover:text-white" title="Bağla"><CloseIcon className="w-3.5 h-3.5" /></button>
-                    </div>
-                  ); }); })()}
+                            <span className="text-xs text-white/90 truncate max-w-[18ch]">{t.title || 'Yeni Tab'}</span>
+                          </button>
+                          <button onClick={() => closeTabById(t.id)} className="text-white/70 hover:text-white" title="Bağla"><CloseIcon className="w-3.5 h-3.5" /></button>
+                        </div>
+                      );
+                    });
+                  })()}
                   <button onClick={openNewTabLocal} className="p-1.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/15" title="Yeni tab"><PlusIcon className="w-4 h-4 text-white/90" /></button>
                 </div>
               </div>
@@ -1744,13 +1759,13 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 <div className="flex-1 min-w-0 relative">
                   <div className="flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-full bg-white/8 border border-white/15 backdrop-blur-xl ring-1 ring-white/10 shadow-[0_4px_16px_rgba(0,0,0,.25)]">
                     <div className="relative w-7 h-7 rounded-full bg-white/10 border border-white/15 flex items-center justify-center font-semibold">
-                    {isBusy && (<div className="absolute inset-0 rounded-full border-2 border-white/25 border-t-white/80 animate-spin"></div>)}
-                    {overlayIncognito ? (
-                      <span className="text-white/90">🕶️</span>
-                    ) : (
-                      <span className="bg-gradient-to-r from-cyan-200 via-white to-white text-transparent bg-clip-text">N</span>
-                    )}
-                  </div>
+                      {isBusy && (<div className="absolute inset-0 rounded-full border-2 border-white/25 border-t-white/80 animate-spin"></div>)}
+                      {overlayIncognito ? (
+                        <span className="text-white/90">🕶️</span>
+                      ) : (
+                        <span className="bg-gradient-to-r from-cyan-200 via-white to-white text-transparent bg-clip-text">N</span>
+                      )}
+                    </div>
                     <input
                       type="text"
                       value={hbQuery}
@@ -1772,6 +1787,36 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                       className="flex-1 min-w-0 bg-transparent outline-none text-base md:text-lg text-white/90 placeholder-white/70 px-1.5 py-2"
                     />
                     <div className="ml-auto flex items-center gap-1.5">
+                      {/* SafeSearch Dropdown (Desktop) */}
+                      <div className="relative mr-2">
+                        <button
+                          onClick={() => setSafeSearchDropdownOpen(!safeSearchDropdownOpen)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border transition-all text-xs font-medium ${safeSearchMode !== 'off' ? 'bg-accent/15 border-accent/30 text-white' : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'}`}
+                        >
+                          <span>🛡️</span>
+                          <span>{safeSearchMode === 'filter' ? 'Filtr: Aktiv' : safeSearchMode === 'blur' ? 'Bulanıqlıq' : 'SafeSearch'}</span>
+                          <span className={`transition-transform duration-200 ${safeSearchDropdownOpen ? 'rotate-180' : ''}`}>▼</span>
+                        </button>
+                        {safeSearchDropdownOpen && (
+                          <div className="absolute top-full right-0 mt-2 w-56 bg-black/90 backdrop-blur-2xl border border-white/15 rounded-2xl shadow-2xl z-[100] py-2 overflow-hidden animate-in fade-in zoom-in duration-200">
+                            <div className="px-4 py-2 text-[11px] text-white/50 uppercase tracking-wider font-bold">SafeSearch Rejimi</div>
+                            {(['filter', 'blur', 'off'] as const).map(m => (
+                              <button
+                                key={m}
+                                onClick={() => {
+                                  try { window.dispatchEvent(new CustomEvent('nov-era-safe-search-changed', { detail: m })); } catch { }
+                                  setSafeSearchDropdownOpen(false);
+                                }}
+                                className={`w-full text-left px-4 py-2.5 text-sm transition-colors flex items-center justify-between ${safeSearchMode === m ? 'bg-accent/20 text-white' : 'text-white/80 hover:bg-white/10'}`}
+                              >
+                                <span>{m === 'filter' ? 'Filtr' : m === 'blur' ? 'Bulanıqlıq' : 'Deaktiv'}</span>
+                                {safeSearchMode === m && <span className="text-accent">✓</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
                       {hbQuery.trim().length > 0 && (
                         <button
                           onClick={() => { setHbQuery(''); setHbSuggestions([]); setHbActiveIndex(-1); }}
@@ -1811,7 +1856,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                             {isHistory && (
                               <button
                                 onMouseDown={(e) => { e.preventDefault(); }}
-                                onClick={(e) => { e.stopPropagation(); setHbHistory(prev => { const next = prev.filter(p => p.toLowerCase() !== sug.toLowerCase()); try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch {} return next; }); setHbSuggestions(prev => prev.filter(p => p !== sug)); setHbActiveIndex(-1); }}
+                                onClick={(e) => { e.stopPropagation(); setHbHistory(prev => { const next = prev.filter(p => p.toLowerCase() !== sug.toLowerCase()); try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch { } return next; }); setHbSuggestions(prev => prev.filter(p => p !== sug)); setHbActiveIndex(-1); }}
                                 className="ml-auto my-1 px-2 py-1 rounded-md text-xs text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/15"
                                 title="Sətiri sil"
                                 aria-label="Sətiri sil"
@@ -1867,13 +1912,13 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
             </button>
           </div>
           <div className="px-3 pb-2">
-            <input value={mobileTabSearch} onChange={(e)=>setMobileTabSearch(e.target.value)} placeholder="Tabları axtarın" className={`w-full px-4 py-2 rounded-full outline-none bg-black/40 border border-white/15 placeholder-white/60`} />
+            <input value={mobileTabSearch} onChange={(e) => setMobileTabSearch(e.target.value)} placeholder="Tabları axtarın" className={`w-full px-4 py-2 rounded-full outline-none bg-black/40 border border-white/15 placeholder-white/60`} />
           </div>
           <div className="flex-1 overflow-auto px-3 pb-6">
             {(() => {
               const list = overlayIncognito ? tabsIncog : tabsNormal;
               const q = mobileTabSearch.trim().toLowerCase();
-              const filtered = q ? list.filter(t => (t.title||'').toLowerCase().includes(q) || (t.url||'').toLowerCase().includes(q)) : list;
+              const filtered = q ? list.filter(t => (t.title || '').toLowerCase().includes(q) || (t.url || '').toLowerCase().includes(q)) : list;
               if (!filtered.length) return (<div className="text-center text-white/60 mt-10">Heç bir tab yoxdur</div>);
               return (
                 <div className="grid grid-cols-2 gap-3">
@@ -1881,10 +1926,10 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                     const active = (overlayIncognito ? activeTabIdIncog : activeTabIdNormal) === t.id;
                     return (
                       <div key={t.id} className={`group relative rounded-2xl border overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,.25)] transition-transform duration-200 ease-out active:scale-95 ${active ? 'border-accent/60 bg-white/10' : 'border-white/15 bg-white/5'}`}
-                            onClick={() => { switchToTab(t.id); setShowTabSwitcher(false); }}>
+                        onClick={() => { switchToTab(t.id); setShowTabSwitcher(false); }}>
                         <div className={`relative w-full pt-[66%] bg-black/40`}>
                           <div className={`absolute inset-0 flex items-center justify-center text-xl font-semibold text-white/70`}>
-                            {t.url ? new URL(t.url).hostname.replace(/^www\./,'').slice(0,2).toUpperCase() : (overlayIncognito ? '🕶️' : 'N')}
+                            {t.url ? new URL(t.url).hostname.replace(/^www\./, '').slice(0, 2).toUpperCase() : (overlayIncognito ? '🕶️' : 'N')}
                           </div>
                           <button onClick={(e) => { e.stopPropagation(); closeTabById(t.id); }} className={`absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center opacity-90 hover:opacity-100 bg-black/60 text-white/90 border border-white/20`}>
                             <CloseIcon className="w-4 h-4" />
@@ -1933,7 +1978,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 }
               }}
               isLoading={loading}
-              onVoiceClick={() => {}}
+              onVoiceClick={() => { }}
               placeholder={overlayIncognito ? "Anonim rejimdə axtarın..." : "Vebdə axtarın..."}
               enableEmptySubmit={pendingImages.length > 0}
               onImageSelected={(imgs) => setPendingImages(prev => [...prev, ...imgs])}
@@ -1945,7 +1990,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
             )}
             {pendingImages.length > 0 && (
               <div className="mt-3 flex items-center gap-2 justify-center">
-                {pendingImages.slice(0,3).map((src, i) => (
+                {pendingImages.slice(0, 3).map((src, i) => (
                   <div key={i} className="relative group">
                     <img src={src} alt="seçilmiş" className="w-10 h-10 rounded-md border border-white/20 object-cover" />
                     <button
@@ -1965,400 +2010,459 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         </div>
       ) : (
         <div>
-        {/* Sticky mini nav on results (mobile only): only logo + back/forward */}
-        {isMobile && (
-        <div className="sticky top-0 z-20 bg-bg-main/95 backdrop-blur border-b border-white/10 -mx-4 md:-mx-6 px-4 md:px-6 py-2">
-          <div className="w-full max-w-5xl mx-auto flex items-center gap-2">
-            {/* Small clickable logo: Incognito results -> go incognito home; otherwise -> go lobby */}
-            <button
-              onClick={() => {
-                if (fromIncogResults) openIncognitoHome(); else clearAll();
-              }}
-              className={`flex items-center gap-2 p-1 rounded-lg hover:bg-white/10`}
-              title={fromIncogResults ? 'Anonim Tab' : 'Əsas səhifə'}
-            >
-              {overlayIncognito ? (
-                <div className="w-6 h-6 rounded-full bg-white/10 border border-white/15 flex items-center justify-center">🕶️</div>
-              ) : (
-                <Logo isLarge={false} />
-              )}
-            </button>
-            {/* Back/Forward global */}
-            <div className="flex items-center gap-2">
-              {(() => {
-                const backDisabled = overlayUrl ? (overlayIndex <= 0) : (!results.length);
-                const forwardDisabled = overlayUrl ? (overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) : (!results.length ? !forwardFromLobby : (resultsIndex < 0 || resultsIndex >= resultsHistory.length - 1));
-                return (
-                  <>
-                    <button
-                      onClick={handleGlobalBack}
-                      disabled={backDisabled}
-                      title="Geri"
-                      className={`p-2 rounded-lg ${backDisabled ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-white/10 text-white/80 hover:bg-white/15'}`}
-                    >
-                      <ArrowLeftIcon className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={handleGlobalForward}
-                      disabled={forwardDisabled}
-                      title="İrəli"
-                      className={`p-2 rounded-lg ${forwardDisabled ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-white/10 text-white/80 hover:bg-white/15'}`}
-                    >
-                      <ArrowRightIcon className="w-4 h-4" />
-                    </button>
-                  </>
-                );
-              })()}
+          {/* Sticky mini nav on results (mobile only): only logo + back/forward */}
+          {isMobile && (
+            <div className="sticky top-0 z-20 bg-bg-main/95 backdrop-blur border-b border-white/10 -mx-4 md:-mx-6 px-4 md:px-6 py-2">
+              <div className="w-full max-w-5xl mx-auto flex items-center gap-2">
+                {/* Small clickable logo: Incognito results -> go incognito home; otherwise -> go lobby */}
+                <button
+                  onClick={() => {
+                    if (fromIncogResults) openIncognitoHome(); else clearAll();
+                  }}
+                  className={`flex items-center gap-2 p-1 rounded-lg hover:bg-white/10`}
+                  title={fromIncogResults ? 'Anonim Tab' : 'Əsas səhifə'}
+                >
+                  {overlayIncognito ? (
+                    <div className="w-6 h-6 rounded-full bg-white/10 border border-white/15 flex items-center justify-center">🕶️</div>
+                  ) : (
+                    <Logo isLarge={false} />
+                  )}
+                </button>
+                {/* Back/Forward global */}
+                <div className="flex items-center gap-2">
+                  {(() => {
+                    const backDisabled = overlayUrl ? (overlayIndex <= 0) : (!results.length);
+                    const forwardDisabled = overlayUrl ? (overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) : (!results.length ? !forwardFromLobby : (resultsIndex < 0 || resultsIndex >= resultsHistory.length - 1));
+                    return (
+                      <>
+                        <button
+                          onClick={handleGlobalBack}
+                          disabled={backDisabled}
+                          title="Geri"
+                          className={`p-2 rounded-lg ${backDisabled ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-white/10 text-white/80 hover:bg-white/15'}`}
+                        >
+                          <ArrowLeftIcon className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={handleGlobalForward}
+                          disabled={forwardDisabled}
+                          title="İrəli"
+                          className={`p-2 rounded-lg ${forwardDisabled ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-white/10 text-white/80 hover:bg-white/15'}`}
+                        >
+                          <ArrowRightIcon className="w-4 h-4" />
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        )}
-        {/* Re-search bar (mobile only): placed under nav and above categories */}
-        {isMobile && (
-          <div className="-mx-4 md:-mx-6 px-4 md:px-6 py-2">
-            <div className="w-full max-w-5xl mx-auto">
-              <HeroSearchBar
-                onSend={async (q) => {
-                  const imgs = pendingImages;
-                  if (imgs && imgs.length) {
-                    const term = (q && q.trim()) ? q.trim() : await extractQueryFromImages();
-                    setPendingImages([]);
-                    setPreviewUrl('');
-                    doSearch(1, term || '');
-                  } else {
-                    const qq = (q || '').trim();
-                    setPreviewUrl('');
-                    if (isProbablyUrl(qq)) {
-                      const url = normalizeUrl(qq);
-                      openOverlay(url);
+          )}
+          {/* Re-search bar (mobile only): placed under nav and above categories */}
+          {isMobile && (
+            <div className="-mx-4 md:-mx-6 px-4 md:px-6 py-2">
+              <div className="w-full max-w-5xl mx-auto">
+                <HeroSearchBar
+                  onSend={async (q) => {
+                    const imgs = pendingImages;
+                    if (imgs && imgs.length) {
+                      const term = (q && q.trim()) ? q.trim() : await extractQueryFromImages();
+                      setPendingImages([]);
+                      setPreviewUrl('');
+                      doSearch(1, term || '');
                     } else {
-                      doSearch(1, qq);
+                      const qq = (q || '').trim();
+                      setPreviewUrl('');
+                      if (isProbablyUrl(qq)) {
+                        const url = normalizeUrl(qq);
+                        openOverlay(url);
+                      } else {
+                        doSearch(1, qq);
+                      }
                     }
-                  }
-                }}
-                isLoading={loading}
-                onVoiceClick={() => {}}
-                placeholder={(fromIncogResults || overlayIncognito) ? 'Anonim rejimdə axtarın...' : 'Vebdə axtarın...'}
-                enableEmptySubmit={pendingImages.length > 0}
-                onImageSelected={(imgs) => setPendingImages(prev => [...prev, ...imgs])}
-              />
-              {pendingImages.length > 0 && (
-                <div className="mt-2 flex items-center gap-2">
-                  {pendingImages.slice(0,2).map((src, i) => (
-                    <div key={i} className="relative group">
-                      <img src={src} alt="seçilmiş" className="w-8 h-8 rounded-md border border-white/20 object-cover" />
-                      <button
-                        onClick={() => removePendingAt(i)}
-                        className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-black/70 text-white/90 text-[9px] leading-3.5 flex items-center justify-center border border-white/30 opacity-80 group-hover:opacity-100"
-                        title="Sil"
-                        aria-label="Şəkli sil"
-                        type="button"
-                      ></button>
-                    </div>
-                  ))}
-                  <button onClick={() => setPendingImages([])} className="px-2 py-1 text-[11px] rounded-md bg-white/10 hover:bg-white/15 border border-white/20 text-white/80">Hamısını sil</button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        <div className="grid gap-4 grid-cols-1">
-        {/* Results list */}
-        <div className="pr-2 pb-24">
-          {/* Tabs: Web / Images / Videos / News / Shopping */}
-          <div className="flex gap-2 mb-3 sticky top-0 bg-bg-main/95 backdrop-blur z-10 p-2 rounded-lg border border-white/10 overflow-x-auto no-scrollbar scroll-touch whitespace-nowrap">
-            {(
-              [
-                { id: 'web', label: `Veb ${results.length ? `(${results.length})` : ''}` },
-                { id: 'images', label: `Şəkillər ${imageResults.length ? `(${imageResults.length})` : ''}` },
-                { id: 'videos', label: `Videolar ${videoUrls.length ? `(${videoUrls.length})` : ''}` },
-                { id: 'news', label: `Xəbərlər ${newsItems.length ? `(${newsItems.length})` : ''}` },
-                { id: 'shopping', label: `Shopping ${products.length ? `(${products.length})` : ''}` },
-              ] as const
-            ).map(t => (
-              <button key={t.id}
-                onClick={() => setActiveTab(t.id as any)}
-                className={`shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeTab === t.id ? 'bg-accent/20 text-white ring-1 ring-accent/50' : 'text-white/70 hover:text-white hover:bg-white/10'
-                }`}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-          {/* AI Analysis compact panel (modern, animated) */}
-          <div className="mb-3 p-3 rounded-2xl border border-white/10 bg-gradient-to-br from-white/6 via-white/4 to-white/6 backdrop-blur-xl shadow-[0_10px_30px_rgba(0,0,0,.25)] transition-all">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <Logo isLarge={false} />
-                <span className="text-sm font-semibold text-white/90">AI Analizi</span>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleAiAnalyze}
-                  disabled={aiLoading || !query.trim()}
-                  className={`px-3 py-1.5 rounded-lg text-sm ${aiLoading || !query.trim() ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-accent/60 hover:bg-accent/70 text-white shadow-md shadow-accent/20'}`}
-                >
-                  {aiLoading ? 'Analiz edilir...' : 'AI Analiz Et'}
-                </button>
-                <button
-                  onClick={() => setAiExpanded(v => !v)}
-                  className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/15 text-white/80 text-xs"
-                  title={aiExpanded ? 'Yığ' : 'Aç'}
-                >
-                  {aiExpanded ? 'Yığ' : 'Aç'}
-                </button>
-                {/* N avatar */}
-
-                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent/40 to-accent/10 border border-accent/40 text-[11px] font-semibold flex items-center justify-center text-white/90">{overlayIncognito ? '🕶️' : 'N'}</div>
-              </div>
-            </div>
-            <div className={`grid transition-all duration-300 ${aiExpanded ? 'grid-rows-[1fr] mt-3' : 'grid-rows-[0fr]'} overflow-hidden`}>
-              <div className="min-h-0 space-y-3">
-                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap">
-                  <input
-                    type="text"
-                    value={aiInput}
-                    onChange={(e) => setAiInput(e.target.value)}
-                    placeholder="Nəyi analiz edim? (default: cari axtarış)"
-                    className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-black/40 text-white placeholder-white/60 border border-white/15 focus:outline-none focus:ring-2 focus:ring-accent/60"
-                  />
-                  <button
-                    onClick={handleAiSend}
-                    disabled={aiLoading || (!aiInput.trim() && pendingImages.length === 0)}
-                    className={`px-3 py-2 rounded-lg text-sm ${aiLoading || (!aiInput.trim() && pendingImages.length === 0) ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-accent/60 hover:bg-accent/70 text-white shadow-md shadow-accent/20'}`}
-                  >
-                    Göndər
-                  </button>
-                  {/* Inline camera and file buttons instead of dropdown */}
-                  <button
-                    onClick={() => aiFileInputRef.current?.click()}
-                    className="p-2 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 shrink-0"
-                    title="Kamera"
-                    type="button"
-                  >
-                    <CameraIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-                  </button>
-                  <button
-                    onClick={() => aiGalleryInputRef.current?.click()}
-                    className="p-2 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 shrink-0"
-                    title="Fayl"
-                    type="button"
-                  >
-                    📁
-                  </button>
-                </div>
+                  }}
+                  isLoading={loading}
+                  onVoiceClick={() => { }}
+                  placeholder={(fromIncogResults || overlayIncognito) ? 'Anonim rejimdə axtarın...' : 'Vebdə axtarın...'}
+                  enableEmptySubmit={pendingImages.length > 0}
+                  onImageSelected={(imgs) => setPendingImages(prev => [...prev, ...imgs])}
+                />
                 {pendingImages.length > 0 && (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {pendingImages.slice(0, 4).map((src, i) => (
+                  <div className="mt-2 flex items-center gap-2">
+                    {pendingImages.slice(0, 2).map((src, i) => (
                       <div key={i} className="relative group">
-                        <img src={src} alt="seçilmiş" className="w-12 h-12 rounded-md border border-white/20 object-cover" />
+                        <img src={src} alt="seçilmiş" className="w-8 h-8 rounded-md border border-white/20 object-cover" />
                         <button
                           onClick={() => removePendingAt(i)}
-                          className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-black/70 text-white/90 text-[10px] leading-4 flex items-center justify-center border border-white/30 opacity-80 group-hover:opacity-100"
+                          className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-black/70 text-white/90 text-[9px] leading-3.5 flex items-center justify-center border border-white/30 opacity-80 group-hover:opacity-100"
                           title="Sil"
                           aria-label="Şəkli sil"
                           type="button"
                         ></button>
                       </div>
                     ))}
-                    {pendingImages.length > 4 && (
-                      <span className="text-xs text-white/70">+{pendingImages.length - 4}</span>
-                    )}
-                    <button onClick={() => setPendingImages([])} className="ml-2 px-2 py-1 text-xs rounded-md bg-white/10 hover:bg-white/15 border border-white/20 text-white/80">Hamısını sil</button>
-                  </div>
-                )}
-                {/* Message bubble */}
-                {(aiLoading || aiText) && (
-                  <div className="flex items-start gap-2">
-                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent/40 to-accent/10 border border-accent/40 flex items-center justify-center text-[11px] font-semibold text-white/90 flex-shrink-0">N</div>
-                    <div className="flex-1 p-3 rounded-2xl bg-white/8 border border-white/10 text-sm text-white/90 whitespace-pre-wrap">
-                      {/* Show analyzed image thumbnails */}
-                      {aiUsedImages && aiUsedImages.length > 0 && (
-                        <div className="mb-2 flex items-center gap-2 flex-wrap">
-                          {aiUsedImages.slice(0, 4).map((src, i) => (
-                            <button key={i} onClick={() => setAiImageModalUrl(src)} className="focus:outline-none">
-                              <img src={src} alt="analiz şəkli" className="w-12 h-12 rounded-md border border-white/20 object-cover hover:opacity-90" />
-                            </button>
-                          ))}
-                          {aiUsedImages.length > 4 && (
-                            <span className="text-xs text-white/70">+{aiUsedImages.length - 4}</span>
-                          )}
-                        </div>
-                      )}
-                      {/* Typing indicator while loading or animating */}
-                      { (aiLoading || (aiText && aiRendered.length < aiText.length)) ? (
-                        <div className="flex items-center gap-1 text-white/70">
-                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/50 animate-bounce" style={{ animationDelay: '0ms' }} />
-                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/50 animate-bounce" style={{ animationDelay: '120ms' }} />
-                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/50 animate-bounce" style={{ animationDelay: '240ms' }} />
-                        </div>
-                      ) : null }
-                      {aiRendered}
-                      {aiSources && aiSources.length > 0 && (
-                        <div className="mt-2 text-xs text-white/70 flex flex-wrap gap-2">
-                          {aiSources.slice(0, 8).map((s, i) => (
-                            <button
-                              key={s.uri + i}
-                              onClick={() => { if (s.uri) { try { openOverlay(s.uri); } catch {} } }}
-                              className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/15 border border-white/15"
-                              title={s.uri || ''}
-                              type="button"
-                            >
-                              [{s.index ?? i + 1}] {s.title}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    <button onClick={() => setPendingImages([])} className="px-2 py-1 text-[11px] rounded-md bg-white/10 hover:bg-white/15 border border-white/20 text-white/80">Hamısını sil</button>
                   </div>
                 )}
               </div>
             </div>
-          </div>
-          {/* Hidden AI attachment inputs */}
-          <input ref={aiFileInputRef} type="file" onChange={handleAiFileUpload} className="hidden" accept="image/*" capture="environment" />
-          <input ref={aiGalleryInputRef} type="file" onChange={handleAiFileUpload} className="hidden" accept="image/*" capture={false} />
+          )}
+          <div className="grid gap-4 grid-cols-1">
+            {/* Results list */}
+            <div className="pr-2 pb-24">
+              {/* Tabs: Web / Images / Videos / News / Shopping */}
+              <div className="flex gap-2 mb-3 sticky top-0 bg-bg-main/95 backdrop-blur z-10 p-2 rounded-lg border border-white/10 overflow-x-auto no-scrollbar scroll-touch whitespace-nowrap">
+                {(
+                  [
+                    { id: 'web', label: `Veb ${results.length ? `(${results.length})` : ''}` },
+                    { id: 'images', label: `Şəkillər ${imageResults.length ? `(${imageResults.length})` : ''}` },
+                    { id: 'videos', label: `Videolar ${videoUrls.length ? `(${videoUrls.length})` : ''}` },
+                    { id: 'news', label: `Xəbərlər ${newsItems.length ? `(${newsItems.length})` : ''}` },
+                    { id: 'shopping', label: `Shopping ${products.length ? `(${products.length})` : ''}` },
+                  ] as const
+                ).map(t => (
+                  <button key={t.id}
+                    onClick={() => setActiveTab(t.id as any)}
+                    className={`shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === t.id ? 'bg-accent/20 text-white ring-1 ring-accent/50' : 'text-white/70 hover:text-white hover:bg-white/10'
+                      }`}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              {/* AI Analysis compact panel (modern, animated) */}
+              <div className="mb-3 p-3 rounded-2xl border border-white/10 bg-gradient-to-br from-white/6 via-white/4 to-white/6 backdrop-blur-xl shadow-[0_10px_30px_rgba(0,0,0,.25)] transition-all">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Logo isLarge={false} />
+                    <span className="text-sm font-semibold text-white/90">AI Analizi</span>
+                  </div>
 
-          {activeTab === 'web' ? (
-            <ul className="space-y-3 max-w-3xl mx-auto">
-              {results.map((item, i) => {
-                const host = getHost(item.link);
-                const favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=32`;
-                const thumbnail = item.pagemap?.cse_thumbnail?.[0]?.src;
-                let domain = host;
-                let isHttp = false;
-                try { const u = new URL(item.link); domain = u.hostname; isHttp = u.protocol === 'http:'; } catch {}
-                const isSuspicious = isHttp;
-                return (
-                  <li key={i} className={`group relative p-4 bg-white/5 rounded-xl border ${
-                    isSuspicious ? 'border-red-500/40' : 'border-white/10'
-                  } hover:bg-white/10 hover:border-white/20 transition-all shadow-lg hover:shadow-xl`}>
+                  <div className="flex items-center gap-2">
                     <button
-                      className="text-left w-full"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        try {
-                          if (isHttp) {
-                            const ok = window.confirm('Bu sayt HTTPS istifadə etmir (HTTP). Davam etmək istəyirsiniz?');
-                            if (!ok) return;
-                          }
-                        } catch {}
-                        openOverlay(item.link);
-                      }}
-                      title={item.title}
+                      onClick={handleAiAnalyze}
+                      disabled={aiLoading || !query.trim()}
+                      className={`px-3 py-1.5 rounded-lg text-sm ${aiLoading || !query.trim() ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-accent/60 hover:bg-accent/70 text-white shadow-md shadow-accent/20'}`}
                     >
-                      <div className="flex gap-3">
-                        {thumbnail && (
-                          <img
-                            src={thumbnail}
-                            alt=""
-                            className="w-20 h-20 object-cover rounded-lg border border-white/10 flex-shrink-0"
-                          />
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <img src={favicon} alt="" className="w-4 h-4" />
-                            <span className="text-xs text-green-400 truncate">{domain}</span>
-                            {isSuspicious && (
-                              <span className="text-xs px-2 py-0.5 bg-red-500/20 text-red-300 rounded-full border border-red-500/40">🔓 HTTPS yoxdur</span>
-                            )}
+                      {aiLoading ? 'Analiz edilir...' : 'AI Analiz Et'}
+                    </button>
+                    <button
+                      onClick={() => setAiExpanded(v => !v)}
+                      className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/15 text-white/80 text-xs"
+                      title={aiExpanded ? 'Yığ' : 'Aç'}
+                    >
+                      {aiExpanded ? 'Yığ' : 'Aç'}
+                    </button>
+                    {/* N avatar */}
+
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent/40 to-accent/10 border border-accent/40 text-[11px] font-semibold flex items-center justify-center text-white/90">{overlayIncognito ? '🕶️' : 'N'}</div>
+                  </div>
+                </div>
+                <div className={`grid transition-all duration-300 ${aiExpanded ? 'grid-rows-[1fr] mt-3' : 'grid-rows-[0fr]'} overflow-hidden`}>
+                  <div className="min-h-0 space-y-3">
+                    <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap">
+                      <input
+                        type="text"
+                        value={aiInput}
+                        onChange={(e) => setAiInput(e.target.value)}
+                        placeholder="Nəyi analiz edim? (default: cari axtarış)"
+                        className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-black/40 text-white placeholder-white/60 border border-white/15 focus:outline-none focus:ring-2 focus:ring-accent/60"
+                      />
+                      <button
+                        onClick={handleAiSend}
+                        disabled={aiLoading || (!aiInput.trim() && pendingImages.length === 0)}
+                        className={`px-3 py-2 rounded-lg text-sm ${aiLoading || (!aiInput.trim() && pendingImages.length === 0) ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-accent/60 hover:bg-accent/70 text-white shadow-md shadow-accent/20'}`}
+                      >
+                        Göndər
+                      </button>
+                      {/* Inline camera and file buttons instead of dropdown */}
+                      <button
+                        onClick={() => aiFileInputRef.current?.click()}
+                        className="p-2 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 shrink-0"
+                        title="Kamera"
+                        type="button"
+                      >
+                        <CameraIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                      </button>
+                      <button
+                        onClick={() => aiGalleryInputRef.current?.click()}
+                        className="p-2 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 shrink-0"
+                        title="Fayl"
+                        type="button"
+                      >
+                        📁
+                      </button>
+                    </div>
+                    {pendingImages.length > 0 && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {pendingImages.slice(0, 4).map((src, i) => (
+                          <div key={i} className="relative group">
+                            <img src={src} alt="seçilmiş" className="w-12 h-12 rounded-md border border-white/20 object-cover" />
+                            <button
+                              onClick={() => removePendingAt(i)}
+                              className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-black/70 text-white/90 text-[10px] leading-4 flex items-center justify-center border border-white/30 opacity-80 group-hover:opacity-100"
+                              title="Sil"
+                              aria-label="Şəkli sil"
+                              type="button"
+                            ></button>
                           </div>
-                          <div className="text-lg font-semibold text-blue-400 group-hover:underline line-clamp-2">{item.title}</div>
-                          <p className="text-sm text-text-sub mt-1 line-clamp-2">{item.snippet}</p>
+                        ))}
+                        {pendingImages.length > 4 && (
+                          <span className="text-xs text-white/70">+{pendingImages.length - 4}</span>
+                        )}
+                        <button onClick={() => setPendingImages([])} className="ml-2 px-2 py-1 text-xs rounded-md bg-white/10 hover:bg-white/15 border border-white/20 text-white/80">Hamısını sil</button>
+                      </div>
+                    )}
+                    {/* Message bubble */}
+                    {(aiLoading || aiText) && (
+                      <div className="flex items-start gap-2">
+                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent/40 to-accent/10 border border-accent/40 flex items-center justify-center text-[11px] font-semibold text-white/90 flex-shrink-0">N</div>
+                        <div className="flex-1 p-3 rounded-2xl bg-white/8 border border-white/10 text-sm text-white/90 whitespace-pre-wrap">
+                          {/* Show analyzed image thumbnails */}
+                          {aiUsedImages && aiUsedImages.length > 0 && (
+                            <div className="mb-2 flex items-center gap-2 flex-wrap">
+                              {aiUsedImages.slice(0, 4).map((src, i) => (
+                                <button key={i} onClick={() => setAiImageModalUrl(src)} className="focus:outline-none">
+                                  <img src={src} alt="analiz şəkli" className="w-12 h-12 rounded-md border border-white/20 object-cover hover:opacity-90" />
+                                </button>
+                              ))}
+                              {aiUsedImages.length > 4 && (
+                                <span className="text-xs text-white/70">+{aiUsedImages.length - 4}</span>
+                              )}
+                            </div>
+                          )}
+                          {/* Typing indicator while loading or animating */}
+                          {(aiLoading || (aiText && aiRendered.length < aiText.length)) ? (
+                            <div className="flex items-center gap-1 text-white/70">
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/50 animate-bounce" style={{ animationDelay: '0ms' }} />
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/50 animate-bounce" style={{ animationDelay: '120ms' }} />
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/50 animate-bounce" style={{ animationDelay: '240ms' }} />
+                            </div>
+                          ) : null}
+                          {aiRendered}
+                          {aiSources && aiSources.length > 0 && (
+                            <div className="mt-2 text-xs text-white/70 flex flex-wrap gap-2">
+                              {aiSources.slice(0, 8).map((s, i) => (
+                                <button
+                                  key={s.uri + i}
+                                  onClick={() => { if (s.uri) { try { openOverlay(s.uri); } catch { } } }}
+                                  className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/15 border border-white/15"
+                                  title={s.uri || ''}
+                                  type="button"
+                                >
+                                  [{s.index ?? i + 1}] {s.title}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {/* Hidden AI attachment inputs */}
+              <input ref={aiFileInputRef} type="file" onChange={handleAiFileUpload} className="hidden" accept="image/*" capture="environment" />
+              <input ref={aiGalleryInputRef} type="file" onChange={handleAiFileUpload} className="hidden" accept="image/*" capture={false} />
+
+              {activeTab === 'web' ? (
+                <ul className="space-y-3 max-w-3xl mx-auto">
+                  {results.map((item, i) => {
+                    const host = getHost(item.link);
+                    const favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=32`;
+                    const thumbnail = item.pagemap?.cse_thumbnail?.[0]?.src;
+                    let domain = host;
+                    let isHttp = false;
+                    try { const u = new URL(item.link); domain = u.hostname; isHttp = u.protocol === 'http:'; } catch { }
+                    const isSuspicious = isHttp;
+                    return (
+                      <li key={i} className={`group relative p-4 bg-white/5 rounded-xl border ${isSuspicious ? 'border-red-500/40' : 'border-white/10'
+                        } hover:bg-white/10 hover:border-white/20 transition-all shadow-lg hover:shadow-xl`}>
+                        <button
+                          className="text-left w-full"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (safeSearchMode === 'filter' && isLikelyExplicit(item.link, item.title, item.snippet)) return null; // Strict hide check
+                            const isBlurred = safeSearchMode === 'blur' && !unblurredItems.has(item.link) && (isLikelyExplicit(query) || isLikelyExplicit(item.link + (thumbnail || ''), item.title, item.snippet));
+                            if (isBlurred) {
+                              setBlurConfirmation({
+                                url: item.link,
+                                onConfirm: () => {
+                                  setUnblurredItems(prev => new Set(prev).add(item.link));
+                                  openOverlay(item.link);
+                                }
+                              });
+                              return;
+                            }
+                            try {
+                              if (isHttp) {
+                                const ok = window.confirm('Bu sayt HTTPS istifadə etmir (HTTP). Davam etmək istəyirsiniz?');
+                                if (!ok) return;
+                              }
+                            } catch { }
+                            openOverlay(item.link);
+                          }}
+                          title={item.title}
+                        >
+                          <div className="flex gap-3">
+                            {thumbnail && (
+                              <img
+                                src={thumbnail}
+                                alt=""
+                                className={`w-20 h-20 object-cover rounded-lg border border-white/10 flex-shrink-0 ${(safeSearchMode === 'blur' && !unblurredItems.has(item.link) && (isLikelyExplicit(query) || isLikelyExplicit(item.link + (thumbnail || ''), item.title, item.snippet))) ? 'blur-2xl' : ''}`}
+                              />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <img src={favicon} alt="" className="w-4 h-4" />
+                                <span className="text-xs text-green-400 truncate">{domain}</span>
+                                {isSuspicious && (
+                                  <span className="text-xs px-2 py-0.5 bg-red-500/20 text-red-300 rounded-full border border-red-500/40">🔓 HTTPS yoxdur</span>
+                                )}
+                              </div>
+                              <div className="text-lg font-semibold text-blue-400 group-hover:underline line-clamp-2">{item.title}</div>
+                              <p className="text-sm text-text-sub mt-1 line-clamp-2">{item.snippet}</p>
+                            </div>
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : activeTab === 'images' ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+                  {imageResults.map((img, idx) => {
+                    const href = img.link || img.image.contextLink;
+                    let domain = '';
+                    try { domain = new URL(href).hostname.replace(/^www\./, ''); } catch { }
+                    return (
+                      <button
+                        key={idx}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (safeSearchMode === 'filter' && isLikelyExplicit(href, img.title)) return null;
+
+                          const isBlurred = safeSearchMode === 'blur' && !unblurredItems.has(href) && (isLikelyExplicit(query) || isLikelyExplicit(href, img.title));
+                          if (isBlurred) {
+                            setBlurConfirmation({
+                              url: href,
+                              onConfirm: () => {
+                                setUnblurredItems(prev => new Set(prev).add(href));
+                                openOverlay(href);
+                              }
+                            });
+                            return;
+                          }
+                          openOverlay(href);
+                        }}
+                        className="group block rounded-xl overflow-hidden border border-white/10 hover:border-white/30 transition-all shadow-lg hover:shadow-2xl"
+                        title={img.title}
+                      >
+                        <div className="aspect-square overflow-hidden">
+                          <img src={img.image.thumbnailLink} alt={img.title} loading="lazy" decoding="async" sizes="(max-width: 640px) 50vw, 33vw" className={`w-full h-full object-cover group-hover:scale-110 transition-transform duration-300 ${(safeSearchMode === 'blur' && !unblurredItems.has(img.link || img.image.contextLink) && (isLikelyExplicit(query) || isLikelyExplicit(img.link || img.image.contextLink || img.image.thumbnailLink, img.title))) ? 'blur-2xl' : ''}`} />
+                        </div>
+                        <div className="p-2 text-left bg-black/30 border-t border-white/10">
+                          <div className="text-[11px] text-green-400 truncate">{domain}</div>
+                          <div className="text-xs text-white/90 line-clamp-2">{img.title || href}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : activeTab === 'videos' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {videoUrls.map((url, i) => (
+                    <button key={i} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openOverlay(url); }} className="text-left p-3 bg-white/5 rounded-xl border border-white/10 hover:bg-white/10 transition-colors truncate">
+                      <div className="text-sm text-blue-300 underline">Videonu aç</div>
+                      <div className="text-xs text-white/60 truncate mt-1">{url}</div>
                     </button>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : activeTab === 'images' ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-              {imageResults.map((img, idx) => {
-                const href = img.link || img.image.contextLink;
-                let domain = '';
-                try { domain = new URL(href).hostname.replace(/^www\./,''); } catch {}
-                return (
+                  ))}
+                </div>
+              ) : activeTab === 'news' ? (
+                <ul className="space-y-3 max-w-3xl mx-auto">
+                  {newsItems.map((n, idx) => (
+                    <li key={idx} className="p-4 bg-white/5 rounded-xl border border-white/10 hover:bg-white/10 transition-all">
+                      <div className="flex gap-3">
+                        {n.imageUrl && (
+                          <img src={n.imageUrl} alt="" className={`w-16 h-16 object-cover rounded-lg border border-white/10 flex-shrink-0 ${(safeSearchMode === 'blur' && !unblurredItems.has(n.url) && (isLikelyExplicit(query) || isLikelyExplicit(n.url + n.imageUrl, n.title, n.summary || ''))) ? 'blur-2xl' : ''}`} />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <button onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (safeSearchMode === 'filter' && isLikelyExplicit(n.url, n.title, n.summary || '')) return null;
+                            const isBlurred = safeSearchMode === 'blur' && !unblurredItems.has(n.url) && (isLikelyExplicit(query) || isLikelyExplicit(n.url + n.imageUrl, n.title, n.summary || ''));
+                            if (isBlurred) {
+                              setBlurConfirmation({ url: n.url, onConfirm: () => { setUnblurredItems(prev => new Set(prev).add(n.url)); openOverlay(n.url); } });
+                              return;
+                            }
+                            openOverlay(n.url);
+                          }} className="text-left text-base font-semibold text-blue-400 hover:underline line-clamp-2">{n.title}</button>
+                          <div className="text-xs text-white/60 mt-1">{n.source} · {new Date(n.publishedAt).toLocaleString()}</div>
+                          {n.summary && <p className="text-sm text-white/70 mt-1 line-clamp-2">{n.summary}</p>}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  {products.map((p, i) => (
+                    <button key={i} onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (safeSearchMode === 'filter' && isLikelyExplicit(p.link, p.title)) return null;
+                      const isBlurred = safeSearchMode === 'blur' && !unblurredItems.has(p.link) && (isLikelyExplicit(query) || isLikelyExplicit(p.link + p.imageUrl, p.title));
+                      if (isBlurred) {
+                        setBlurConfirmation({ url: p.link, onConfirm: () => { setUnblurredItems(prev => new Set(prev).add(p.link)); openOverlay(p.link); } });
+                        return;
+                      }
+                      openOverlay(p.link);
+                    }} className="text-left p-3 bg-white/5 rounded-xl border border-white/10 hover:bg-white/10 transition-colors">
+                      {p.imageUrl && (
+                        <div className="aspect-square mb-2 overflow-hidden rounded-lg bg-black/20">
+                          <img src={p.imageUrl} alt="" className={`w-full h-full object-cover ${(safeSearchMode === 'blur' && !unblurredItems.has(p.link) && (isLikelyExplicit(query) || isLikelyExplicit(p.link + p.imageUrl, p.title))) ? 'blur-2xl' : ''}`} />
+                        </div>
+                      )}
+                      <div className="text-sm font-medium text-white/90 line-clamp-2">{p.title}</div>
+                      {p.price && <div className="text-xs text-green-400 mt-1">{p.price}</div>}
+                      {p.source && <div className="text-[11px] text-white/60 mt-1">{p.source}</div>}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Sticky pagination at bottom of scroller (Web tab only) */}
+              {activeTab === 'web' && results.length > 0 && (
+                <div className="sticky bottom-0 left-0 right-0 mt-3 pt-2 pb-2 safe-bottom bg-bg-main/80 backdrop-blur border-t border-white/10 flex items-center justify-center gap-3 sm:gap-4">
                   <button
-                    key={idx}
-                    onClick={() => { openOverlay(href); }}
-                    className="group block rounded-xl overflow-hidden border border-white/10 hover:border-white/30 transition-all shadow-lg hover:shadow-2xl"
-                    title={img.title}
+                    onClick={goPrevPageBtn}
+                    disabled={page <= 1}
+                    className={`px-3 sm:px-4 py-2 rounded-md text-sm transition-colors ${page <= 1 ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
                   >
-                    <div className="aspect-square overflow-hidden">
-                      <img src={img.image.thumbnailLink} alt={img.title} loading="lazy" decoding="async" sizes="(max-width: 640px) 50vw, 33vw" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300" />
-                    </div>
-                    <div className="p-2 text-left bg-black/30 border-t border-white/10">
-                      <div className="text-[11px] text-green-400 truncate">{domain}</div>
-                      <div className="text-xs text-white/90 line-clamp-2">{img.title || href}</div>
-                    </div>
+                    Əvvəlki
                   </button>
-                );
-              })}
+                  <span className="text-text-sub text-sm sm:text-base">Səhifə {page}</span>
+                  <button
+                    onClick={goNextPageBtn}
+                    disabled={!hasNextPage}
+                    className={`px-3 sm:px-4 py-2 rounded-md text-sm transition-colors ${!hasNextPage ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
+                  >
+                    Növbəti
+                  </button>
+                </div>
+              )}
             </div>
-          ) : activeTab === 'videos' ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {videoUrls.map((url, i) => (
-                <button key={i} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openOverlay(url); }} className="text-left p-3 bg-white/5 rounded-xl border border-white/10 hover:bg-white/10 transition-colors truncate">
-                  <div className="text-sm text-blue-300 underline">Videonu aç</div>
-                  <div className="text-xs text-white/60 truncate mt-1">{url}</div>
-                </button>
-              ))}
-            </div>
-          ) : activeTab === 'news' ? (
-            <ul className="space-y-3 max-w-3xl mx-auto">
-              {newsItems.map((n, idx) => (
-                <li key={idx} className="p-4 bg-white/5 rounded-xl border border-white/10 hover:bg-white/10 transition-all">
-                  <button onClick={() => { const u = n.url; openOverlay(u); }} className="text-left text-base font-semibold text-blue-400 hover:underline">{n.title}</button>
-                  <div className="text-xs text-white/60 mt-1">{n.source} · {new Date(n.publishedAt).toLocaleString()}</div>
-                  {n.summary && <p className="text-sm text-white/70 mt-1 line-clamp-2">{n.summary}</p>}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {products.map((p, i) => (
-                <button key={i} onClick={(e) => { e.preventDefault(); e.stopPropagation(); const u = p.link; openOverlay(u); }} className="text-left p-3 bg-white/5 rounded-xl border border-white/10 hover:bg-white/10 transition-colors">
-                  <div className="text-sm font-medium text-white/90 line-clamp-2">{p.title}</div>
-                  {p.price && <div className="text-xs text-green-400 mt-1">{p.price}</div>}
-                  {p.source && <div className="text-[11px] text-white/60 mt-1">{p.source}</div>}
-                </button>
-              ))}
-            </div>
-          )}
 
-          {/* Sticky pagination at bottom of scroller (Web tab only) */}
-          {activeTab === 'web' && results.length > 0 && (
-            <div className="sticky bottom-0 left-0 right-0 mt-3 pt-2 pb-2 safe-bottom bg-bg-main/80 backdrop-blur border-t border-white/10 flex items-center justify-center gap-3 sm:gap-4">
-              <button
-                onClick={goPrevPageBtn}
-                disabled={page <= 1}
-                className={`px-3 sm:px-4 py-2 rounded-md text-sm transition-colors ${page <= 1 ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
-              >
-                Əvvəlki
-              </button>
-              <span className="text-text-sub text-sm sm:text-base">Səhifə {page}</span>
-              <button
-                onClick={goNextPageBtn}
-                disabled={!hasNextPage}
-                className={`px-3 sm:px-4 py-2 rounded-md text-sm transition-colors ${!hasNextPage ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
-              >
-                Növbəti
-              </button>
-            </div>
-          )}
+            {/* No side preview; pages open in full overlay or new tab */}
+          </div>
         </div>
-
-        {/* No side preview; pages open in full overlay or new tab */}
-      </div>
-      </div>
       )}
 
       {/* Full-screen web overlay (kept mounted; hidden when closed) */}
       {typeof document !== 'undefined' && createPortal(
-        <div ref={overlayContainerRef} className={`fixed inset-0 z-[10050] flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] overflow-hidden overscroll-none transition-opacity duration-200 ${ overlayShellOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none' }`} style={{ top: 0 as any, colorScheme: (isLightOverlay ? 'light' : 'dark') as any }}>
+        <div ref={overlayContainerRef} className={`fixed inset-0 z-[10050] flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] overflow-hidden overscroll-none transition-opacity duration-200 ${overlayShellOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`} style={{ top: 0 as any, colorScheme: (isLightOverlay ? 'light' : 'dark') as any }}>
           <div className={`absolute inset-0 ${isLightOverlay ? 'bg-white' : 'bg-black'}`} />
           <div className="relative z-50 h-full w-full flex flex-col">{overlayChromeHidden && (<div className="absolute top-2 right-2 z-[60]"><button onClick={() => setOverlayChromeHidden(false)} className={`px-2 py-1 rounded-md text-xs border ${isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black border-black/20' : 'bg-white/10 hover:bg-white/15 text-white border-white/20'}`}>Paneli göstər</button></div>)}
             {isMobile && !overlayChromeHidden && (
@@ -2460,10 +2564,10 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                   <>
                     <img src={`https://www.google.com/s2/favicons?domain=${(() => { try { return new URL(overlayUrl).hostname; } catch { return 'nov-era.app'; } })()}&sz=32`} className="w-4 h-4" />
                     <button
-                      onClick={() => { try { navigator.clipboard.writeText(overlayUrl!); } catch {} }}
+                      onClick={() => { try { navigator.clipboard.writeText(overlayUrl!); } catch { } }}
                       title="URL-i kopyala"
                       className={`hidden md:inline-flex items-center px-2 py-1 rounded-md text-[11px] border ${isLightOverlay ? 'bg-white/60 text-black/80 border-black/20 hover:bg-white/75' : 'bg-black/40 text-white/80 border-white/20 hover:bg-black/55'}`}
-                    >{(() => { try { return new URL(overlayUrl!).hostname.replace(/^www\./,''); } catch { return 'link'; } })()}</button>
+                    >{(() => { try { return new URL(overlayUrl!).hostname.replace(/^www\./, ''); } catch { return 'link'; } })()}</button>
                   </>
                 ) : (!isMobile ? (
                   <div className={`w-7 h-7 rounded-full flex items-center justify-center font-extrabold ${isLightOverlay ? 'bg-black/10' : 'bg-white/10'}`}>
@@ -2520,9 +2624,9 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
             {false && !isMobile && (
               <div className={`px-2 py-1 overflow-x-auto no-scrollbar ${isLightOverlay ? 'bg-black/5' : 'bg-white/5'}`} style={{ display: overlayChromeHidden ? 'none' : undefined }}>
                 <div className="flex items-center gap-1">
-                  { (overlayIncognito ? tabsIncog : tabsNormal).map((t) => {
+                  {(overlayIncognito ? tabsIncog : tabsNormal).map((t) => {
                     const isActive = (overlayIncognito ? activeTabIdIncog : activeTabIdNormal) === t.id;
-                    const host = t.url ? (()=>{ try { return new URL(t.url!).hostname; } catch { return 'nov-era.app'; } })() : '';
+                    const host = t.url ? (() => { try { return new URL(t.url!).hostname; } catch { return 'nov-era.app'; } })() : '';
                     const fav = t.url ? `https://www.google.com/s2/favicons?domain=${host}&sz=32` : '';
                     return (
                       <div key={t.id} className={`group flex items-center gap-2 rounded-t-lg px-3 py-1.5 border ${isActive ? (isLightOverlay ? 'bg-black/15 border-black/25' : 'bg-white/15 border-white/25') : (isLightOverlay ? 'bg-black/5 border-black/15 hover:bg-black/10' : 'bg-white/5 border-white/15 hover:bg-white/10')}`}>
@@ -2564,8 +2668,32 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                     </div>
                   )}
                 </div>
-                {/* Row 2: search input */}
+                {/* Row 2: search input + SafeSearch (Mobile) */}
                 <div className="flex items-center gap-2">
+                  <div className="relative shrink-0">
+                    <button
+                      onClick={() => setSafeSearchDropdownOpen(!safeSearchDropdownOpen)}
+                      className={`w-10 h-10 rounded-full flex items-center justify-center border ${safeSearchMode !== 'off' ? 'bg-accent/20 border-accent/40' : 'bg-white/10 border-white/20'}`}
+                    >
+                      <span className="text-lg">🛡️</span>
+                    </button>
+                    {safeSearchDropdownOpen && (
+                      <div className="absolute top-full left-0 mt-2 w-48 bg-black/95 backdrop-blur-2xl border border-white/20 rounded-2xl shadow-2xl z-[100] py-1 overflow-hidden">
+                        {(['filter', 'blur', 'off'] as const).map(m => (
+                          <button
+                            key={m}
+                            onClick={() => {
+                              try { window.dispatchEvent(new CustomEvent('nov-era-safe-search-changed', { detail: m })); } catch { }
+                              setSafeSearchDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-3 text-sm ${safeSearchMode === m ? 'bg-accent/20 text-white' : 'text-white/80'}`}
+                          >
+                            {m === 'filter' ? 'Filtr' : m === 'blur' ? 'Bulanıqlıq' : 'Deaktiv'}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={overlaySearch}
@@ -2684,7 +2812,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 );
               })()
             )
-          }
+            }
           </div>
         </div>, document.body)}
 
@@ -2743,6 +2871,38 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       </style>
 
       {/* No in-app camera UI here; HeroSearchBar uses native camera/gallery pickers */}
+      {blurConfirmation && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-[#1e1e1e] border border-white/10 rounded-2xl p-6 max-w-sm w-full shadow-2xl scale-100 animate-in zoom-in-95 duration-200 mx-4">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-12 h-12 rounded-full bg-accent/20 text-accent flex items-center justify-center text-2xl mb-4">
+                🛡️
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-2">SafeSearch Xəbərdarlığı</h3>
+              <p className="text-white/70 text-sm mb-6">
+                Bu məzmun SafeSearch tərəfindən bulanıqlaşdırılıb. Açmaq istədiyinizə əminsiniz?
+              </p>
+              <div className="flex gap-3 w-full">
+                <button
+                  onClick={() => setBlurConfirmation(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/80 font-medium transition-colors border border-white/5"
+                >
+                  Belə saxla
+                </button>
+                <button
+                  onClick={() => {
+                    blurConfirmation.onConfirm();
+                    setBlurConfirmation(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-accent hover:bg-accent/80 text-white font-medium transition-colors shadow-lg shadow-accent/20"
+                >
+                  Bulanıqlığı aç
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

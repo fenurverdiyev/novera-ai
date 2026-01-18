@@ -10,7 +10,7 @@ interface ContactProperties {
 }
 
 export const useDeviceTools = (addMessage: AddMessageFunc) => {
-    
+
     const executeToolCalls = async (calls: ToolCall[]) => {
         for (const call of calls) {
             try {
@@ -36,6 +36,9 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
                     case 'webSearch':
                         await executeWebSearch(call.args);
                         break;
+                    case 'showMap':
+                        await executeShowMap(call.args);
+                        break;
                     default:
                         console.warn(`Unknown tool call: ${call.name}`);
                         addMessage({ role: 'model', text: `Naməlum alət "${call.name}" çağırıldı.` });
@@ -59,7 +62,7 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
         }
 
         try {
-            addMessage({ role: 'model', text: `Kontaktlarınızdan "${contactName}" adlı şəxsi seçin...`});
+            addMessage({ role: 'model', text: `Kontaktlarınızdan "${contactName}" adlı şəxsi seçin...` });
             const contacts = await (navigator as any).contacts.select(requiredProperties, { multiple: false }) as ContactProperties[];
             if (contacts.length === 0) {
                 addMessage({ role: 'model', text: "Kontakt seçilmədi." });
@@ -94,7 +97,7 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
 
         const requiredProp = service === 'email' ? 'email' : 'tel';
         const contact = await selectContact(contactName, [requiredProp]);
-        
+
         if (!contact) return;
 
         const displayName = contact.name?.[0] || contactName;
@@ -119,49 +122,49 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
                     const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
                     window.open(whatsappUrl, '_blank');
                 } else {
-                     addMessage({ role: 'model', text: `${displayName} üçün telefon nömrəsi tapılmadı.` });
+                    addMessage({ role: 'model', text: `${displayName} üçün telefon nömrəsi tapılmadı.` });
                 }
                 break;
-            
+
             case 'email':
                 if (contact.email?.[0]) {
                     addMessage({ role: 'model', text: `E-poçt vasitəsilə ${displayName} adlı şəxsə mesaj göndərmək üçün proqram açılır...` });
                     const mailtoUri = `mailto:${contact.email[0]}?body=${encodeURIComponent(message)}`;
                     window.location.href = mailtoUri;
                 } else {
-                     addMessage({ role: 'model', text: `${displayName} üçün e-poçt ünvanı tapılmadı.` });
+                    addMessage({ role: 'model', text: `${displayName} üçün e-poçt ünvanı tapılmadı.` });
                 }
                 break;
-                
+
             default:
-                 addMessage({ role: 'model', text: `Naməlum mesaj xidməti: ${service}` });
+                addMessage({ role: 'model', text: `Naməlum mesaj xidməti: ${service}` });
         }
     };
-    
+
     const executeSetAlarm = async (args: Record<string, any>) => {
         const { time, label } = args;
-        const confirmation = label 
+        const confirmation = label
             ? `✅ Tətbiqin yerli versiyasında '${label}' üçün saat ${time}-da siqnal qurulacaq.`
             : `✅ Tətbiqin yerli versiyasında saat ${time}-da siqnal qurulacaq.`;
         addMessage({ role: 'model', text: confirmation });
     };
-    
+
     const executeAddCalendarEvent = async (args: Record<string, any>) => {
         const { title, description, startTime } = args;
-        addMessage({ 
-            role: 'model', 
+        addMessage({
+            role: 'model',
             text: `✅ Tətbiqin yerli versiyasında təqvimə yeni tədbir əlavə olunacaq:\n**Başlıq:** ${title}\n**Vaxt:** ${startTime}${description ? `\n**Təsvir:** ${description}` : ''}`
         });
     };
 
     const executeAddNote = async (args: Record<string, any>) => {
         const { content } = args;
-        addMessage({ 
-            role: 'model', 
+        addMessage({
+            role: 'model',
             text: `✅ Tətbiqin yerli versiyasında aşağıdakı qeyd əlavə olunacaq:\n\n> ${content}`
         });
     };
-    
+
     const executeToggleDevice = async (args: Record<string, any>) => {
         const { device, state } = args;
         const deviceName = {
@@ -170,8 +173,8 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
             'flashlight': 'Fənər'
         }[device.toLowerCase()] || device;
         const stateName = state.toLowerCase() === 'on' ? 'yandırılır' : 'söndürülür';
-        addMessage({ 
-            role: 'model', 
+        addMessage({
+            role: 'model',
             text: `✅ Tətbiqin yerli versiyasında ${deviceName} ${stateName}...`
         });
     };
@@ -201,6 +204,18 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
         }
     };
 
-     
-     return { executeToolCalls };
- };
+    const executeShowMap = async (args: Record<string, any>) => {
+        const { location } = args || {};
+        if (!location || typeof location !== 'string') {
+            addMessage({ role: 'model', text: 'Xəritədə göstərmək üçün məkan tapılmadı.' });
+            return;
+        }
+        addMessage({
+            role: 'model',
+            text: `📍 "${location}" məkanını xəritədə göstərirəm.`,
+            maps: [location],
+        });
+    };
+
+    return { executeToolCalls };
+};

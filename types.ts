@@ -19,10 +19,11 @@ export interface Message {
   news?: NewsArticle[];
   products?: ShoppingProduct[];
   sources?: Source[];
+  maps?: string[];
   related?: string[];
   isLoading?: boolean;
   ttsError?: string;
-  progressStep?: 1 | 2 | 3; // 1: Thinking, 2: Searching, 3: Answering
+  progressStep?: 1 | 2 | 3;
   toolCalls?: ToolCall[];
   toolResult?: { call: ToolCall; output: any };
 }
@@ -59,7 +60,7 @@ export interface ShoppingProduct {
 
 export type AppView = 'search' | 'google-search' | 'browser' | 'news' | 'weather' | 'translate' | 'settings' | 'profile' | 'live' | 'safe-search' | 'incognito';
 
-export type SearchMode = 'base' | 'universe';
+export type SearchMode = 'base' | 'universe' | 'canvas';
 
 export interface VoiceOption {
   id: string;
@@ -77,12 +78,40 @@ export interface WeatherData {
   current: {
     temp: number;
     condition: string;
+    humidity: number;
+    windSpeed: number;
+    feelsLike: number;
+    pressure: number;
+    code: number; // For icon mapping
+    uvIndex?: number;
+    visibility?: number;
   };
+  hourly: {
+    time: string;
+    temp: number;
+    condition: string;
+    code: number;
+  }[];
   forecast: {
     day: string;
     temp: number;
     condition: string;
+    code: number; // For icon mapping
+    sunrise?: string;
+    sunset?: string;
   }[];
+  sunMoon?: {
+    sunrise: string;
+    sunset: string;
+    moonrise: string;
+    moonset: string;
+    moonPhase: string;
+  };
+  airQuality?: {
+    value: number;
+    category: string;
+    description?: string;
+  };
   location: string;
 }
 
@@ -146,7 +175,7 @@ declare class SpeechRecognition extends EventTarget {
   lang: string;
   maxAlternatives: number;
   serviceURI: string;
-  
+
   onstart: ((this: SpeechRecognition, ev: Event) => any) | null;
   onend: ((this: SpeechRecognition, ev: Event) => any) | null;
   onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => any) | null;
@@ -158,7 +187,7 @@ declare class SpeechRecognition extends EventTarget {
   onspeechend: ((this: SpeechRecognition, ev: Event) => any) | null;
   onaudiostart: ((this: SpeechRecognition, ev: Event) => any) | null;
   onaudioend: ((this: SpeechRecognition, ev: Event) => any) | null;
-  
+
   start(): void;
   stop(): void;
   abort(): void;
@@ -170,10 +199,10 @@ interface SpeechGrammarList {
   [index: number]: SpeechGrammar;
 }
 
-  interface SpeechGrammar {
-    src: string;
-    weight: number;
-  }
+interface SpeechGrammar {
+  src: string;
+  weight: number;
+}
 
 // ================= Live Conversation Types =================
 // Minimal types used by live UI components

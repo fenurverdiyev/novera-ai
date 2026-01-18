@@ -18,7 +18,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [activeIndex, setActiveIndex] = useState<number>(-1);
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
-  
+
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -52,7 +52,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
     };
   }, [query]);
 
-  
+
 
   const handleSend = () => {
     const q = query.trim();
@@ -113,7 +113,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
         setSuggestions([]);
       };
       reader.readAsDataURL(file);
-      try { (event.target as HTMLInputElement).value = ''; } catch {}
+      try { (event.target as HTMLInputElement).value = ''; } catch { }
     }
   };
 
@@ -158,7 +158,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
   };
 
   const stopListening = () => {
-    try { recognitionRef.current?.stop(); } catch {}
+    try { recognitionRef.current?.stop(); } catch { }
     setIsListening(false);
   };
 
@@ -166,7 +166,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
     if (isListening) stopListening(); else startListening();
   };
 
-  
+
 
   return (
     <div className="w-full max-w-4xl mx-auto px-3 sm:px-4">
@@ -175,32 +175,39 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
           <div className="relative flex flex-col rounded-2xl overflow-hidden border border-white/15 bg-white/5 p-1 ring-1 ring-white/10">
             <button
               onClick={() => onChangeMode('base')}
-              className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${
-                searchMode === 'base' 
-                  ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]' 
-                  : 'text-white/70 hover:text-white hover:bg-white/5'
-              }`}
+              className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${searchMode === 'base'
+                ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]'
+                : 'text-white/70 hover:text-white hover:bg-white/5'
+                }`}
             >
               Base
             </button>
             <button
               onClick={() => onChangeMode('universe')}
-              className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${
-                searchMode === 'universe' 
-                  ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]' 
-                  : 'text-white/70 hover:text-white hover:bg-white/5'
-              }`}
+              className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${searchMode === 'universe'
+                ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]'
+                : 'text-white/70 hover:text-white hover:bg-white/5'
+                }`}
             >
               Universe
+            </button>
+            <button
+              onClick={() => onChangeMode('canvas')}
+              className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${searchMode === 'canvas'
+                ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]'
+                : 'text-white/70 hover:text-white hover:bg-white/5'
+                }`}
+            >
+              Canvas
             </button>
           </div>
         </div>
 
         <div className="flex items-center flex-1 px-2 gap-2">
           <div className="relative">
-            <button 
-              onClick={() => setShowUploadMenu(!showUploadMenu)} 
-              className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors" 
+            <button
+              onClick={() => setShowUploadMenu(!showUploadMenu)}
+              className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors"
               aria-label="Şəkil yüklə"
             >
               <PlusIcon className="w-5 h-5 md:w-6 md:h-6" />
@@ -260,7 +267,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
               placeholder="NovEra-dan soruşun..."
               className={`w-full bg-transparent text-base md:text-lg text-white placeholder-gray-500 focus:outline-none px-3 ${isListening ? 'ring-1 ring-rose-400/60 rounded-lg' : ''}`}
               disabled={isLoading}
-              onFocus={() => { if (suggestions.length > 0) {/* show stays */} }}
+              onFocus={() => { if (suggestions.length > 0) {/* show stays */ } }}
             />
             {suggestions.length > 0 && (
               <div className="absolute bottom-full left-0 mb-2 w-full bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 shadow-2xl z-20 overflow-auto sm:max-h-64 max-h-56">
@@ -311,18 +318,18 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
           </button>
         </div>
 
-        <input 
+        <input
           ref={fileInputRef}
-          type="file" 
+          type="file"
           onChange={handleFileUpload}
-          className="hidden" 
+          className="hidden"
           accept="image/*"
         />
-        <input 
+        <input
           ref={galleryInputRef}
-          type="file" 
+          type="file"
           onChange={handleFileUpload}
-          className="hidden" 
+          className="hidden"
           accept="image/*"
           capture="environment"
         />

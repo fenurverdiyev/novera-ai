@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import type { Message, PlaceResult, SearchNewsItem, ShoppingProduct, NewsArticle } from '../types';
-import { BotIcon, UserIcon, PlayIcon } from './Icons';
+import { BotIcon, UserIcon, PlayIcon, CopyIcon } from './Icons';
+import { HtmlPreview } from './HtmlPreview';
 import { SourcePill } from './SourcePill';
 import { RelatedQuery } from './RelatedQuery';
 import { ProtectedImage } from './ProtectedImage';
+import { MapComponent } from './MapComponent';
 
 // Remember which message IDs have already been animated (typing/fade) so it doesn't repeat
 const animatedMessageIds = new Set<string>();
@@ -46,144 +48,200 @@ const openInNovEra = (url: string) => {
     // tel:, mailto:, etc. fallback
     window.open(url, '_blank', 'noopener,noreferrer');
   } catch {
-    try { window.open(url, '_blank'); } catch {}
+    try { window.open(url, '_blank'); } catch { }
   }
 };
 
 const formatText = (text: string, onOpen: (url: string) => void) => {
   if (!text) return null;
 
+  // Split by code blocks first
+  const codeBlockRegex = /```(\w+)?\s*([\s\S]*?)```/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    // Add text before code block
+    if (match.index > lastIndex) {
+      parts.push({ type: 'text', content: text.slice(lastIndex, match.index) });
+    }
+
+    // Add code block
+    parts.push({ type: 'code', language: match[1] || 'text', content: match[2] });
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push({ type: 'text', content: text.slice(lastIndex) });
+  }
+
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   const boldRegex = /\*\*(.*?)\*\*/g;
 
-  return text.split('\n').map((line, lineIndex) => {
-    if (line.trim() === '') {
-      return <div key={lineIndex} className="h-4" />; // Render empty lines as spacing
+  return parts.map((part, index) => {
+    if (part.type === 'code') {
+      if (part.language && part.language.toLowerCase() === 'html') {
+        return <HtmlPreview key={index} html={part.content} />;
+      }
+      // For other code blocks, just render as pre/code for now
+      return (
+        <div key={index} className="relative group my-4">
+          <div className="absolute right-3 top-3 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(part.content);
+                const btn = document.getElementById(`copy-btn-${index}`);
+                if (btn) btn.innerText = 'Kopyalandı';
+                setTimeout(() => { if (btn) btn.innerText = 'Kopyala'; }, 2000);
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/70 hover:text-white text-[11px] font-medium border border-white/10 backdrop-blur-md transition-all"
+            >
+              <CopyIcon className="w-3.5 h-3.5" />
+              <span id={`copy-btn-${index}`}>Kopyala</span>
+            </button>
+          </div>
+          <pre className="bg-black/30 p-4 pt-12 rounded-xl overflow-x-auto text-[13px] font-mono text-white/90 border border-white/10 leading-relaxed custom-scrollbar">
+            <code>{part.content}</code>
+          </pre>
+        </div>
+      );
     }
-    const parts = line.split(urlRegex);
 
-    return (
-      <p key={lineIndex} className="my-1">
-        {parts.map((part, partIndex) => {
-          if (part.match(urlRegex)) {
-            return (
-              <button
-                key={`${lineIndex}-${partIndex}`}
-                onClick={() => onOpen(part)}
-                className="text-accent underline hover:no-underline"
-                title={part}
-                type="button"
-              >
-                {part}
-              </button>
-            );
-          }
-          const boldParts = part.split(boldRegex);
-          return boldParts.map((bp, bidx) => {
-            if (bidx % 2 === 1) {
-              return <strong key={`${lineIndex}-${partIndex}-${bidx}`}>{bp}</strong>;
+    // Render text part with links and bold
+    return part.content.split('\n').map((line, lineIndex) => {
+      if (line.trim() === '') {
+        return <div key={`${index}-${lineIndex}`} className="h-4" />;
+      }
+
+      const lineParts = line.split(urlRegex);
+      return (
+        <p key={`${index}-${lineIndex}`} className="my-1">
+          {lineParts.map((p, pIndex) => {
+            if (p.match(urlRegex)) {
+              return (
+                <button
+                  key={`${index}-${lineIndex}-${pIndex}`}
+                  onClick={() => onOpen(p)}
+                  className="text-accent underline hover:no-underline"
+                  title={p}
+                  type="button"
+                >
+                  {p}
+                </button>
+              );
             }
-            return <React.Fragment key={`${lineIndex}-${partIndex}-${bidx}`}>{bp}</React.Fragment>;
-          });
-        })}
-      </p>
-    );
+            const boldParts = p.split(boldRegex);
+            return boldParts.map((bp, bidx) => {
+              if (bidx % 2 === 1) {
+                return <strong key={`${index}-${lineIndex}-${pIndex}-${bidx}`}>{bp}</strong>;
+              }
+              return <React.Fragment key={`${index}-${lineIndex}-${pIndex}-${bidx}`}>{bp}</React.Fragment>;
+            });
+          })}
+        </p>
+      );
+    });
   });
 };
 // Removed ModernProgress HUD in favor of pure typing effect
 
 const ImagePreview: React.FC<{ url: string; onOpen: (url: string) => void }> = ({ url, onOpen }) => {
-    const [hasError, setHasError] = useState(false);
-    const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}`;
-    // stage: 0 = original, 1 = proxy, 2 = placeholder
-    const [stage, setStage] = useState<0 | 1 | 2>(0);
-    const placeholder = 'https://placehold.co/640x360?text=Şəkil+yüklənmədi';
-    const src = stage === 0 ? url : (stage === 1 ? proxyUrl : placeholder);
+  const [hasError, setHasError] = useState(false);
+  const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}`;
+  // stage: 0 = original, 1 = proxy, 2 = placeholder
+  const [stage, setStage] = useState<0 | 1 | 2>(0);
+  const placeholder = 'https://placehold.co/640x360?text=Şəkil+yüklənmədi';
+  const src = stage === 0 ? url : (stage === 1 ? proxyUrl : placeholder);
 
-    if (hasError) {
-        return (
-            <button onClick={() => onOpen(url)} className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105 flex items-center justify-center p-2">
-                <div className="text-center">
-                    <svg className="mx-auto h-8 w-8 text-text-sub" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                    <p className="mt-1 text-xs text-text-sub">Şəkil yüklənmədi</p>
-                </div>
-            </button>
-        );
-    }
-
+  if (hasError) {
     return (
-        <button onClick={() => onOpen(url)} className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105">
-            <img 
-                src={src} 
-                alt="Vizual önizləmə" 
-                className="w-full h-full object-cover" 
-                loading="lazy" 
-                onError={() => {
-                  if (stage === 0) setStage(1); // try proxy
-                  else if (stage === 1) setStage(2); // try placeholder
-                  else setHasError(true);
-                }}
-            />
-        </button>
+      <button onClick={() => onOpen(url)} className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105 flex items-center justify-center p-2">
+        <div className="text-center">
+          <svg className="mx-auto h-8 w-8 text-text-sub" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <p className="mt-1 text-xs text-text-sub">Şəkil yüklənmədi</p>
+        </div>
+      </button>
     );
+  }
+
+  return (
+    <button onClick={() => onOpen(url)} className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105">
+      <img
+        src={src}
+        alt="Vizual önizləmə"
+        className="w-full h-full object-cover"
+        loading="lazy"
+        onError={() => {
+          if (stage === 0) setStage(1); // try proxy
+          else if (stage === 1) setStage(2); // try placeholder
+          else setHasError(true);
+        }}
+      />
+    </button>
+  );
 };
 
 const VideoPreview: React.FC<{ url: string; onOpen: (url: string) => void }> = ({ url, onOpen }) => {
-    const getYouTubeEmbedUrl = (videoUrl: string): string | null => {
-        let videoId;
-        try {
-            const urlObj = new URL(videoUrl);
-            if (urlObj.hostname === 'youtu.be') {
-                videoId = urlObj.pathname.slice(1);
-            } else if (urlObj.hostname.includes('youtube.com')) {
-                videoId = urlObj.searchParams.get('v');
-            }
-        } catch (e) {
-            return null;
-        }
-
-        return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
-    };
-
-    const embedUrl = getYouTubeEmbedUrl(url);
-
-    if (embedUrl) {
-        return (
-            <div className="rounded-lg overflow-hidden aspect-video bg-bg-onyx">
-                <iframe
-                    src={embedUrl}
-                    title="YouTube video player"
-                    frameBorder="0"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                    className="w-full h-full"
-                ></iframe>
-            </div>
-        );
+  const getYouTubeEmbedUrl = (videoUrl: string): string | null => {
+    let videoId;
+    try {
+      const urlObj = new URL(videoUrl);
+      if (urlObj.hostname === 'youtu.be') {
+        videoId = urlObj.pathname.slice(1);
+      } else if (urlObj.hostname.includes('youtube.com')) {
+        videoId = urlObj.searchParams.get('v');
+      }
+    } catch (e) {
+      return null;
     }
-    
+
+    return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
+  };
+
+  const embedUrl = getYouTubeEmbedUrl(url);
+
+  if (embedUrl) {
     return (
-        <button onClick={() => onOpen(url)} className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105 flex items-center justify-center p-2">
-            <div className="text-center">
-                <PlayIcon className="mx-auto h-10 w-10 text-text-sub" />
-                <p className="mt-2 text-xs text-text-sub">Videoya baxın</p>
-            </div>
-        </button>
+      <div className="rounded-lg overflow-hidden aspect-video bg-bg-onyx">
+        <iframe
+          src={embedUrl}
+          title="YouTube video player"
+          frameBorder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+          className="w-full h-full"
+        ></iframe>
+      </div>
     );
+  }
+
+  return (
+    <button onClick={() => onOpen(url)} className="block rounded-lg overflow-hidden aspect-video bg-bg-onyx group transition-transform duration-200 ease-in-out hover:scale-105 flex items-center justify-center p-2">
+      <div className="text-center">
+        <PlayIcon className="mx-auto h-10 w-10 text-text-sub" />
+        <p className="mt-2 text-xs text-text-sub">Videoya baxın</p>
+      </div>
+    </button>
+  );
 };
+
+// MapEmbed replaced by MapComponent from './MapComponent'
 
 const PlaceCard: React.FC<{ place: PlaceResult; onOpen: (url: string) => void }> = ({ place, onOpen }) => {
   const [thumbSrc, setThumbSrc] = useState<string | null>(place.thumbnailUrl || null);
+  const [showEmbed, setShowEmbed] = useState(false);
   return (
     <div className="rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors">
       <div className="flex items-start gap-3">
         {thumbSrc ? (
           <img src={thumbSrc} alt={place.title} className="w-16 h-16 rounded-lg object-cover" onError={() => setThumbSrc('https://placehold.co/96x96?text=📍')} />
-         ) : (
-           <div className="w-16 h-16 rounded-lg bg-bg-onyx flex items-center justify-center text-text-sub">📍</div>
-         )}
+        ) : (
+          <div className="w-16 h-16 rounded-lg bg-bg-onyx flex items-center justify-center text-text-sub">📍</div>
+        )}
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-white truncate">{place.title}</div>
           <div className="text-xs text-white/70 mt-1 truncate">
@@ -195,8 +253,14 @@ const PlaceCard: React.FC<{ place: PlaceResult; onOpen: (url: string) => void }>
             </div>
           )}
           <div className="flex flex-wrap gap-2 mt-2">
+            <button
+              onClick={() => setShowEmbed(!showEmbed)}
+              className={`text-xs px-2 py-1 rounded-lg transition-colors ${showEmbed ? 'bg-accent text-white' : 'bg-accent/20 text-accent hover:bg-accent/30'}`}
+            >
+              {showEmbed ? 'Xəritəni gizlə' : 'Xəritədə göstər'}
+            </button>
             {place.mapsUrl && (
-              <button onClick={() => onOpen(place.mapsUrl!)} className="text-xs px-2 py-1 rounded-lg bg-accent/20 text-accent hover:bg-accent/30">Xəritədə aç</button>
+              <button onClick={() => onOpen(place.mapsUrl!)} className="text-xs px-2 py-1 rounded-lg bg-white/10 text-white hover:bg-white/20">Google Maps</button>
             )}
             {place.website && (
               <button onClick={() => onOpen(place.website!)} className="text-xs px-2 py-1 rounded-lg bg-white/10 text-white hover:bg-white/20">Sayt</button>
@@ -207,42 +271,13 @@ const PlaceCard: React.FC<{ place: PlaceResult; onOpen: (url: string) => void }>
           </div>
         </div>
       </div>
-      {/* Image Zoom Modal for chat images */}
-      {imageModalUrl && (
-        <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setImageModalUrl(null)}>
-          <div className="relative max-w-5xl w-full max-h-[90vh] bg-black/40 border border-white/20 rounded-xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => setImageModalUrl(null)} className="absolute top-2 right-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white/90 text-sm border border-white/20">Bağla</button>
-            <div className="w-full h-full flex items-center justify-center p-3">
-              <img src={imageModalUrl} alt="şəkil" className="max-w-full max-h-[72vh] object-contain rounded-lg" />
-            </div>
-            <div className="flex items-center justify-between gap-2 px-3 pb-3">
-              <div className="text-xs text-white/70">Şəkil önizləmə</div>
-              <div className="flex items-center gap-2">
-                <a href={imageModalUrl} download className="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 text-white/90 text-sm border border-white/20">Yüklə</a>
-                <button
-                  onClick={async () => {
-                    try {
-                      if (navigator.share && /^https?:/i.test(imageModalUrl)) {
-                        await navigator.share({ title: 'Şəkil', url: imageModalUrl });
-                        setShareHint('Paylaşıldı');
-                        setTimeout(() => setShareHint(null), 1400);
-                        return;
-                      }
-                      await navigator.clipboard.writeText(imageModalUrl);
-                      setShareHint('Link kopyalandı');
-                      setTimeout(() => setShareHint(null), 1400);
-                    } catch {
-                      setShareHint('Paylaşmaq alınmadı');
-                      setTimeout(() => setShareHint(null), 1600);
-                    }
-                  }}
-                  className="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 text-white/90 text-sm border border-white/20"
-                >Paylaş</button>
-                <a href={imageModalUrl} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 text-white/90 text-sm border border-white/20">Yeni tab</a>
-              </div>
-            </div>
-            {shareHint && <div className="absolute left-3 bottom-3 text-xs text-white/80 bg-white/10 rounded-md px-2 py-1 border border-white/20">{shareHint}</div>}
-          </div>
+      {showEmbed && (
+        <div className="mt-4">
+          <MapComponent
+            query={place.address || place.title}
+            lat={place.latitude}
+            lng={place.longitude}
+          />
         </div>
       )}
     </div>
@@ -292,27 +327,26 @@ const ProductCard: React.FC<{ product: ShoppingProduct; onOpen: (url: string) =>
   const href = normalizeLink(product.link);
   return (
     <button onClick={() => onOpen(href)} className="block text-left rounded-xl bg-white/5 border border-white/10 p-4 hover:bg-white/10 transition-colors w-full">
-        {product.imageUrl && (
-          <div className="aspect-square w-full bg-white/10 rounded-lg mb-3 overflow-hidden">
-            <ProtectedImage
-              src={product.imageUrl}
-              alt={product.title}
-              className="w-full h-full object-contain"
-              proxyParams="w=512&h=512&fit=contain&output=webp&q=85"
-            />
-          </div>
-        )}
-        <div className="font-semibold text-white leading-tight line-clamp-2">{product.title}</div>
-        <div className="text-sm text-accent font-bold mt-2">{product.price}</div>
-        <div className="text-xs text-white/70 mt-1">{product.source}</div>
-        {product.rating && (
-            <div className="text-xs text-white/70 mt-1">⭐ {product.rating.toFixed(1)} ({product.reviews || 0})</div>
-        )}
+      {product.imageUrl && (
+        <div className="aspect-square w-full bg-white/10 rounded-lg mb-3 overflow-hidden">
+          <ProtectedImage
+            src={product.imageUrl}
+            alt={product.title}
+            className="w-full h-full object-contain"
+            proxyParams="w=512&h=512&fit=contain&output=webp&q=85"
+          />
+        </div>
+      )}
+      <div className="font-semibold text-white leading-tight line-clamp-2">{product.title}</div>
+      <div className="text-sm text-accent font-bold mt-2">{product.price}</div>
+      <div className="text-xs text-white/70 mt-1">{product.source}</div>
+      {product.rating && (
+        <div className="text-xs text-white/70 mt-1">⭐ {product.rating.toFixed(1)} ({product.reviews || 0})</div>
+      )}
     </button>
   );
 };
 
-// Decide if products should be shown for this message
 // Decide if products should be shown for this message
 const shouldShowProducts = (m: Message): boolean => {
   if (!m.products || m.products.length === 0) return false;
@@ -339,7 +373,7 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
       setAvatarUrl(stored);
       const aiStored = localStorage.getItem('nov-era-ai-avatar');
       setAiAvatarUrl(aiStored || '/ai-avatar.png');
-    } catch {}
+    } catch { }
   }, []);
 
   // Preload AI avatar and fall back to monogram if missing
@@ -405,18 +439,18 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
         </div>
         <div className="flex-grow">
           <div className={`max-w-none text-text-main leading-relaxed text-[15px] md:text-base ${isStreaming ? 'animate-[breath_2.4s_ease-in-out_infinite]' : ''}`}>
-             {formatText(displayText, openInNovEra)}
-             {isStreaming && <span className="inline-block w-[6px] h-4 align-[-1px] bg-white/80 rounded-[1px] ml-1 animate-[blink_1.1s_steps(2,_start)_infinite]"></span>}
-             {message.isLoading && !displayText && (
-               <div className="mt-2 space-y-2">
-                 <div className="h-3 rounded-md bg-white/10 animate-pulse" />
-                 <div className="h-3 w-11/12 rounded-md bg-white/10 animate-pulse" />
-                 <div className="h-3 w-8/12 rounded-md bg-white/10 animate-pulse" />
-               </div>
-             )}
+            {formatText(displayText, openInNovEra)}
+            {isStreaming && <span className="inline-block w-[6px] h-4 align-[-1px] bg-white/80 rounded-[1px] ml-1 animate-[blink_1.1s_steps(2,_start)_infinite]"></span>}
+            {message.isLoading && !displayText && (
+              <div className="mt-2 space-y-2">
+                <div className="h-3 rounded-md bg-white/10 animate-pulse" />
+                <div className="h-3 w-11/12 rounded-md bg-white/10 animate-pulse" />
+                <div className="h-3 w-8/12 rounded-md bg-white/10 animate-pulse" />
+              </div>
+            )}
           </div>
           <style>{`@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}} @keyframes breath{0%{opacity:.92}50%{opacity:.65}100%{opacity:.92}}`}</style>
-          
+
           {(message.images && message.images.length > 0) || (message.videos && message.videos.length > 0) ? (
             <div className="mt-6">
               <h3 className="text-lg font-semibold text-text-main mb-3">Vizuallar</h3>
@@ -426,6 +460,17 @@ export const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, onRelat
               </div>
             </div>
           ) : null}
+
+          {message.maps && message.maps.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold text-text-main mb-3">Xəritə</h3>
+              <div className="space-y-4">
+                {message.maps.map((q) => (
+                  <MapComponent key={q} query={q} />
+                ))}
+              </div>
+            </div>
+          )}
 
           {message.places && message.places.length > 0 && (
             <div className="mt-6">
