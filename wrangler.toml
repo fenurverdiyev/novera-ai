@@ -5,7 +5,6 @@ pages_build_output_dir = "dist"
 
 [assets]
 directory = "./dist"
-binding = "ASSETS"
 
 [vars]
 # Bütün environment variable-ları həmçinin Cloudflare Dashboard-dan əlavə etməyi unutmayın
