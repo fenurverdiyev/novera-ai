@@ -1,0 +1,13 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "novera-ai"
+compatibility_date = "2024-11-01"
+pages_build_output_dir = "dist"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+[vars]
+# Bütün environment variable-ları həmçinin Cloudflare Dashboard-dan əlavə etməyi unutmayın
+GEMINI_API_KEY = ""
+VITE_VERTEX_PROXY_URL = ""
