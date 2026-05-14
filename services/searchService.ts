@@ -47,12 +47,17 @@ const allowedVideoHosts = [
 function isSafeImageUrl(u: string): boolean {
   try {
     const url = new URL(u);
-    if (url.protocol !== 'https:') return false;
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
     if (blockedHostPatterns.some(re => re.test(url.hostname))) return false;
-    // allow common image extensions or known hosts
-    const okExt = /(\.jpg|\.jpeg|\.png|\.webp|\.gif)(\?|#|$)/i.test(url.pathname);
-    const knownHost = /googleusercontent|gstatic|wikimedia|wikipedia|imgur|pinimg|twimg|ggpht\.com|fbcdn\.net/i.test(url.hostname);
-    return okExt || knownHost;
+    // Allow if it has a common image extension
+    const okExt = /(\.jpg|\.jpeg|\.png|\.webp|\.gif|\.svg|\.bmp)(\?|#|$)/i.test(url.pathname);
+    if (okExt) return true;
+    // Allow known reputable image/content hosts even without extension
+    const knownHost = /googleusercontent|gstatic|wikimedia|wikipedia|imgur|pinimg|twimg|ggpht\.com|fbcdn\.net|cdninstagram|bitly|pixabay|pexels|unsplash|staticflickr/i.test(url.hostname);
+    if (knownHost) return true;
+    // Heuristic: if it's from a search engine result and looks like an image service
+    if (/img|image|photo|pic/i.test(url.hostname) || /img|image|photo|pic/i.test(url.pathname)) return true;
+    return false;
   } catch {
     return false;
   }
@@ -253,7 +258,11 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
   }
   const { hl, gl } = detectLocaleForSearch();
   const hl2 = (hl || 'en').toLowerCase();
-  const gl2 = (gl || 'us').toLowerCase();
+  let gl2 = (gl || 'us').toLowerCase();
+  
+  // Special case for Azerbaijani: if hl is 'az', but gl is 'us', maybe try 'tr' or broader search
+  if (hl2 === 'az' && gl2 === 'us') gl2 = 'tr'; 
+
   const [imageResults, videoResults] = await Promise.all([
     callSerperApi('images', query, maxImages, { gl: gl2, hl: hl2, safeSearch: opts?.safeSearch }),
     callSerperApi('videos', query, maxVideos, { gl: gl2, hl: hl2, safeSearch: opts?.safeSearch }),
@@ -270,16 +279,19 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
   )).filter(isSafeVideoUrl);
 
   // Fallback: try general search endpoint to harvest images/videos if empty
-  if (images.length === 0 || videos.length === 0) {
+  if (images.length < 2 || videos.length === 0) {
     try {
       const alt = await callSerperApi('search', query, Math.max(maxImages, maxVideos), { gl: gl2, hl: hl2, safeSearch: opts?.safeSearch });
       if (alt) {
-        if (images.length === 0) {
+        if (images.length < 2) {
           const altImgs: any[] = (alt.images || alt.image_results || alt.inlineImages || alt.inline_images || []);
           const altImageUrls = Array.from(new Set(
             (altImgs || []).map((img: any) => img.imageUrl || img.image || img.thumbnail || img.link).filter(Boolean)
           ));
-          if (altImageUrls.length) images = altImageUrls.filter(isSafeImageUrl).slice(0, maxImages);
+          if (altImageUrls.length) {
+              const extra = altImageUrls.filter(isSafeImageUrl);
+              images = Array.from(new Set([...images, ...extra])).slice(0, maxImages);
+          }
         }
         if (videos.length === 0) {
           const altVids: any[] = (alt.videos || alt.video_results || alt.inlineVideos || alt.inline_videos || []);
@@ -290,6 +302,15 @@ export async function searchImagesAndVideos(query: string, maxImages = 6, maxVid
         }
       }
     } catch { }
+  }
+
+  // Final fallback: broaden to 'us' if still empty and we were using a specific gl
+  if (images.length === 0 && gl2 !== 'us') {
+      try {
+          const backup = await callSerperApi('images', query, maxImages, { gl: 'us', hl: 'en', safeSearch: opts?.safeSearch });
+          const items = (backup?.images || backup?.image_results || []) as any[];
+          images = items.map((img: any) => img.imageUrl || img.image || img.thumbnail || img.link).filter(Boolean).filter(isSafeImageUrl);
+      } catch {}
   }
 
   // Final fallback: Google CSE (if configured and explicitly enabled)

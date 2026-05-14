@@ -2,13 +2,18 @@
 <html lang="az">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M50 0 L61 39 L100 50 L61 61 L50 100 L39 61 L0 50 L39 39 Z' fill='%2358A6FF'/%3E%3C/svg%3E" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
-    <meta name="theme-color" content="#000000" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="apple-touch-icon" href="/logo.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#03040a" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="format-detection" content="telephone=no" />
+    <link rel="manifest" href="/manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="NovEra">
     <title>NovEra - Yeni dövr başlayır</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -30,79 +35,129 @@
         }
       }
     </script>
-        <style>
-      /* Layout reset removed (revert to original) */
-
-      /* --- THEMES --- */
-      :root, .theme-novera, .theme-terra, .theme-nebula {
-        --color-bg-jet: #0d0f19;
-        --color-bg-slate: #1b2026;
-        --color-bg-onyx: #232931;
-        --color-text: #eeeeee;
-        --color-subtext: #a8b2c1;
+    <style>
+      :root {
+        --color-bg-jet: #03040a;
+        --color-bg-slate: #0a0b14;
+        --color-bg-onyx: #121421;
+        --color-text: #f8fafc;
+        --color-subtext: #94a3b8;
+        --color-accent: #38bdf8;
       }
-      .theme-novera { --color-accent: #58A6FF; --color-bg-jet: #000000; }
-      .theme-terra { /* Nature theme */ --color-accent: #6ee7b7; }
-      .theme-nebula { /* Universe/Nebula theme */ --color-accent: #c084fc; }
+
+      .theme-novera { --color-accent: #38bdf8; --color-bg-jet: #03040a; }
+      .theme-terra { --color-accent: #2dd4bf; --color-bg-jet: #020617; }
+      .theme-nebula { --color-accent: #818cf8; --color-bg-jet: #050505; }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        /* Set on body for theme consistency, but main app uses transparent bg */
         background-color: var(--color-bg-jet);
-        color: var(--color-text-main);
+        color: var(--color-text);
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        margin: 0;
+        overflow-x: hidden;
       }
       
-      html, body, #root { height: 100%; min-height: 100%; }
-      body { overscroll-behavior-y: none; }
-      #root { min-height: calc(var(--vh, 1vh) * 100); }
-      @supports (height: 100dvh) {
-        #root { min-height: 100dvh; }
+      html, body { height: 100%; width: 100%; }
+      #root { 
+        display: flex; 
+        flex-direction: column; 
+        justify-content: space-between; 
+        min-height: 100vh;
+        width: 100%; 
       }
-      .app-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; }
-      * { -webkit-tap-highlight-color: transparent; }
-      .safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem); }
 
-      #theme-animation-canvas {
-        position: fixed;
-        top: 0;
-        left: 0;
+      @media (max-width: 768px) {
+        h1 { font-size: 24px; }
+        .search-bar { width: 90%; margin: 0 auto; }
+      }
+
+      #loading-screen {
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 9999 !important;
+        background-color: #03040a !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      
+      #loading-screen.hidden {
+        display: none !important;
+      }
+
+      #loading-screen > div {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
         width: 100%;
         height: 100%;
-        z-index: -1;
-      }
-
-      /* --- LOADING SCREEN --- */
-      #loading-screen {
-        position: fixed;
-        inset: 0;
-        z-index: 100;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        background-color: #0d0f19;
-        transition: opacity 0.5s ease-out;
-      }
-      #loading-screen.hidden {
-        opacity: 0;
-        pointer-events: none;
       }
       
-      /* --- ANIMATIONS --- */
-      @keyframes pulse-orb {
-        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.7); }
-        70% { transform: scale(1); box-shadow: 0 0 0 20px rgba(88, 166, 255, 0), 0 0 30px rgba(88, 166, 255, 0.5); }
-        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(88, 166, 255, 0); }
+      #loading-screen div, #loading-screen p {
+        position: relative;
+        z-index: 1010;
+        margin: 10px 0;
       }
-      .orb-animation { animation: pulse-orb 4s infinite ease-in-out; }
-      .recording-pulse { animation: pulse-rec 1.5s infinite ease-in-out; }
-      @keyframes pulse-rec {
-        0% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0.7); }
-        70% { box-shadow: 0 0 0 10px rgba(255, 82, 82, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0); }
+
+      .glass-card {
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
       }
+
+      .glass-input {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        transition: all 0.2s ease;
+      }
+
+      .glass-input:focus {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: var(--color-accent);
+        box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+      }
+
+      /* Scrollbar */
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+      ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+
+      .app-scroll { scrollbar-gutter: stable; }
+
+      @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+      .animate-fade-in { animation: fade-in 0.4s ease-out forwards; }
     </style>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').then(reg => {
+            console.log('SW registered');
+          }).catch(err => {
+            console.log('SW failed', err);
+          });
+        });
+      }
+    </script>
     <link rel="preconnect" href="https://rsms.me/">
     <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
-  <script type="importmap">
+    
+    <!-- Export Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <script type="importmap">
 {
   "imports": {
     "react/": "https://aistudiocdn.com/react@^19.1.1/",
@@ -114,6 +169,8 @@
   }
 }
 </script>
+  </head>
+  <body class="font-sans">
     <script>
       (function() {
         const setVh = () => {
@@ -123,11 +180,23 @@
         setVh();
         window.addEventListener('resize', setVh);
         window.addEventListener('orientationchange', setVh);
+
+        // Failsafe: hide loading screen after 4 seconds
+        setTimeout(() => {
+          const ls = document.getElementById('loading-screen');
+          if (ls) {
+            ls.style.display = 'none';
+            try { ls.remove(); } catch(e) {}
+          }
+        }, 4000);
       })();
     </script>
-  </head>
-  <body class="font-sans">
-    <div id="loading-screen"></div>
+    <div id="loading-screen" style="position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; background: #03040a !important; z-index: 99999 !important; display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: center !important; margin: 0 !important; padding: 0 !important; font-family: sans-serif !important;">
+      <div style="display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: center !important; gap: 24px !important; text-align: center !important; width: 100% !important;">
+        <h1 style="color: white !important; font-size: clamp(40px, 10vw, 64px) !important; font-weight: 900 !important; letter-spacing: -2px !important; margin: 0 !important;">NovEra</h1>
+        <p style="color: #38bdf8 !important; font-size: 14px !important; font-weight: 600 !important; letter-spacing: 4px !important; text-transform: uppercase !important; margin: 0 !important;">Yüklənir...</p>
+      </div>
+    </div>
     <div id="root" class="bg-transparent"></div>
     <canvas id="theme-animation-canvas"></canvas>
     <script type="module" src="/index.tsx"></script>

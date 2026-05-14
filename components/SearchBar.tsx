@@ -184,15 +184,15 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
 
   return (
     <div className="w-full max-w-4xl mx-auto px-3 sm:px-4">
-      <div className="relative flex items-stretch bg-bg-slate rounded-2xl shadow-xl p-1.5 sm:p-2 border border-white/10">
+      <div className="relative flex items-stretch bg-[#1e1e1e] rounded-full shadow-md p-1.5 sm:p-2 border border-white/10">
         <div className="hidden sm:flex items-center gap-3 pr-3 border-r border-white/10">
           <div className="relative flex flex-col rounded-2xl overflow-hidden border border-white/15 bg-white/5 p-1 ring-1 ring-white/10">
             <button
               onClick={() => onChangeMode('base')}
               className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${
                 searchMode === 'base' 
-                  ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]' 
-                  : 'text-white/70 hover:text-white hover:bg-white/5'
+                  ? 'text-white bg-white/10 shadow-sm' 
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
               }`}
             >
               Base
@@ -201,8 +201,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
               onClick={() => onChangeMode('universe')}
               className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${
                 searchMode === 'universe' 
-                  ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]' 
-                  : 'text-white/70 hover:text-white hover:bg-white/5'
+                  ? 'text-white bg-white/10 shadow-sm' 
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
               }`}
             >
               Universe
@@ -258,6 +258,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
               className={`w-full bg-transparent text-base md:text-lg text-white placeholder-gray-500 focus:outline-none px-3 ${isListening ? 'ring-1 ring-rose-400/60 rounded-lg' : ''}`}
               disabled={isLoading}
               onFocus={() => { if (suggestions.length > 0) {/* show stays */} }}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
             />
             {suggestions.length > 0 && (
               <div className="absolute bottom-full left-0 mb-2 w-full bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 shadow-2xl z-20 overflow-auto sm:max-h-64 max-h-56">

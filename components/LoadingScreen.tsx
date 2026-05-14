@@ -116,12 +116,14 @@ export const LoadingScreen: React.FC = () => {
     }, []);
 
     return (
-        <div className="relative w-full h-full flex flex-col items-center justify-center">
+        <div className="w-full h-full flex flex-col items-center justify-center gap-8">
             <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
-            <div className="z-10 animate-pulse">
+            <div className="z-10 animate-pulse text-center">
                 <Logo isLarge={true} />
             </div>
-            <p className="z-10 text-text-sub absolute bottom-16 animate-pulse">Yüklənir...</p>
+            <p className="z-10 text-text-sub text-lg animate-pulse tracking-widest uppercase font-medium">
+                Yüklənir...
+            </p>
         </div>
     );
 };

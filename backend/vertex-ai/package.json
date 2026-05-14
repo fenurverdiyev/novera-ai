@@ -1,0 +1,20 @@
+{
+  "name": "novera-vertex-ai-proxy",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@google-cloud/vertexai": "^1.9.0",
+    "@google/genai": "^2.0.1",
+    "@tavily/core": "^0.7.3",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.1",
+    "google-auth-library": "^10.6.2",
+    "jsonwebtoken": "^9.0.3"
+  }
+}

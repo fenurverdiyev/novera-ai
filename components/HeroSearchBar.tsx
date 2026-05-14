@@ -182,15 +182,15 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4">
-      <div className="relative">
+      <div className="relative group">
         {/* Left search button (acts like Enter). Active only if there is text */}
         <button
           onClick={handleSend}
           disabled={!canSearch}
-          className={`absolute left-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-all border z-30 pointer-events-auto ${
+          className={`absolute left-3 top-1/2 -translate-y-1/2 p-2 rounded-full transition-all duration-300 z-30 pointer-events-auto ${
             canSearch
-              ? 'bg-accent/40 hover:bg-accent/50 border-accent/60 text-white shadow-md'
-              : 'bg-white/5 border-white/15 text-white/40 cursor-not-allowed'
+              ? 'bg-accent/20 hover:bg-accent/40 text-accent shadow-md scale-100'
+              : 'bg-transparent text-white/30 cursor-not-allowed scale-95'
           }`}
           aria-label="Axtar"
           title="Axtar"
@@ -208,21 +208,26 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
           onFocus={() => { setIsFocused(true); if (query.trim().length < 2) { setSuggestions(history); setActiveIndex(history.length ? 0 : -1); } }}
           onBlur={() => { setTimeout(() => { setIsFocused(false); setSuggestions([]); setActiveIndex(-1); }, 150); }}
           placeholder={ph}
-          className={`w-full rounded-full h-12 md:h-16 pl-10 md:pl-12 pr-32 md:pr-28 bg-black/30 text-base md:text-xl placeholder-white/70 focus:outline-none border border-white/20 ring-1 ring-white/10 backdrop-blur`}
+          className={`w-full rounded-full h-14 md:h-[64px] pl-14 md:pl-16 pr-32 md:pr-[140px] bg-[#0f0f13]/85 backdrop-blur-3xl text-[16px] md:text-[18px] font-medium text-white placeholder-white/40 focus:outline-none border border-white/10 ring-1 ring-black/20 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)] focus:border-accent/40 focus:ring-accent/50 transition-all duration-300`}
           disabled={isLoading}
+          autoComplete="one-time-code"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          data-form-type="other"
         />
 
         {/* Right action icons */}
-        <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5 md:gap-2">
+        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 md:gap-2">
           {query.trim().length > 0 && (
             <button
               onClick={() => { setQuery(''); setSuggestions([]); }}
-              className="p-2 rounded-full text-white/80 bg-white/10 hover:bg-white/15 border border-white/20"
+              className="p-2 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-colors"
               aria-label="Mətni sil"
               title="Mətni sil"
               type="button"
             >
-              <CloseIcon className="w-5 h-5" />
+              <CloseIcon className="w-4 h-4 md:w-5 md:h-5" />
             </button>
           )}
 
@@ -237,7 +242,7 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
         </style>
           <button
             onClick={toggleListening}
-            className={`p-2 rounded-full ${isListening ? 'text-rose-300 bg-rose-500/10 ring-2 ring-rose-400/60 animate-pulse' : 'text-white/90 bg-white/10 hover:bg-white/15'} border border-white/20`}
+            className={`p-2 rounded-full transition-colors ${isListening ? 'text-rose-400 bg-rose-500/20 ring-2 ring-rose-400/50 animate-pulse' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
             aria-pressed={isListening}
             aria-label="Səsi mətinə çevir"
             title="Səsi mətinə çevir"
@@ -245,18 +250,10 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
             {isLoading ? <LoadingSpinner className="w-4 h-4 md:w-5 md:h-5" /> : <MicrophoneIcon className="w-4 h-4 md:w-5 md:h-5" />}
           </button>
 
-          <button
-            onClick={() => { fileInputRef.current?.click(); }}
-            className="p-2 rounded-full text-white/90 bg-white/10 hover:bg-white/15 border border-white/20"
-            aria-label="Kamera ilə çək"
-            title="Kamera ilə çək"
-          >
-            <CameraIcon className="w-4 h-4 md:w-5 md:h-5" />
-          </button>
           <div className="relative">
             <button
               onClick={() => setShowUploadMenu(v => !v)}
-              className="p-2 rounded-full text-white/90 bg-white/10 hover:bg-white/15 border border-white/20"
+              className="p-2 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors"
               aria-label="Şəkil əlavə et"
               title="Şəkil əlavə et"
               type="button"
@@ -264,98 +261,97 @@ export const HeroSearchBar: React.FC<HeroSearchBarProps> = ({ onSend, isLoading,
               <PlusIcon className="w-4 h-4 md:w-5 md:h-5" />
             </button>
             {showUploadMenu && (
-              <div className="absolute right-0 top-[calc(100%+0.5rem)] bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl border border-white/20 py-2 min-w-[180px] z-20 overflow-hidden">
-                <div className="absolute right-4 -top-1 w-3 h-3 rotate-45 bg-white/10 border-t border-l border-white/20" />
-                <button onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 transition-colors flex items-center gap-2">
+              <div className="absolute right-0 top-[calc(100%+1rem)] bg-[#16161a]/95 backdrop-blur-3xl rounded-[20px] shadow-2xl border border-white/10 p-1.5 min-w-[180px] z-[60] overflow-hidden animate-in fade-in zoom-in duration-200">
+                <button onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }} className="w-full text-left px-3 py-2.5 rounded-xl text-sm font-medium text-white/80 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2">
                   <span>📷</span>
                   <span>Kamera</span>
                 </button>
-                <button onClick={() => { galleryInputRef.current?.click(); setShowUploadMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 transition-colors flex items-center gap-2">
+                <button onClick={() => { galleryInputRef.current?.click(); setShowUploadMenu(false); }} className="w-full text-left px-3 py-2.5 rounded-xl text-sm font-medium text-white/80 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2">
                   <span>🖼️</span>
                   <span>Qalereya</span>
                 </button>
-                <button onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 transition-colors flex items-center gap-2">
+                <button onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }} className="w-full text-left px-3 py-2.5 rounded-xl text-sm font-medium text-white/80 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2">
                   <span>📁</span>
                   <span>Fayl yüklə</span>
                 </button>
               </div>
             )}
           </div>
-          {/* Hamburger menyu yoxdur — global sol yuxarıda yerləşdirilib */}
         </div>
 
         {/* Suggestions / History popover */}
         {(isHistoryMode || suggestions.length > 0) && (
-          <div className="absolute top-[calc(100%+0.5rem)] left-0 right-0 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 shadow-2xl ring-1 ring-black/10 z-50 overflow-auto max-h-[60vh] thin-scroll overscroll-contain pointer-events-auto">
-            {isHistoryMode && (
-              <div className="flex items-center justify-between px-4 py-2 text-xs text-white/70 border-b border-white/10">
-                <span>Keçmiş axtarışlar</span>
-                {history.length > 0 && (
-                  <button
-                    onMouseDown={(e) => { e.preventDefault(); }}
-                    onTouchStart={(e) => { e.preventDefault(); }}
-                    onClick={() => { setHistory([]); setSuggestions([]); try { localStorage.setItem('novEra.search.history', JSON.stringify([])); } catch {} }}
-                    className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-white/80 border border-white/15"
-                  >
-                    Hamısını sil
-                  </button>
-                )}
-              </div>
-            )}
-            {suggestions.map((sug, idx) => (
-              <div
-                key={sug}
-                onMouseEnter={() => setActiveIndex(idx)}
-                className={`w-full flex items-center gap-2 px-2 ${idx === activeIndex ? 'bg-accent/20' : 'hover:bg-white/15'} transition-colors`}
-              >
-                <button
-                  onMouseDown={(e) => { e.preventDefault(); }}
-                  onTouchStart={(e) => { e.preventDefault(); }}
-                  onClick={() => {
-                    setQuery(sug);
-                    onSend(sug);
-                    setHistory(prev => {
-                      const cleaned = sug.slice(0, 200);
-                      let next = prev.filter(p => p.toLowerCase() !== cleaned.toLowerCase());
-                      next.unshift(cleaned);
-                      if (next.length > 20) next = next.slice(0, 20);
-                      try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch {}
-                      return next;
-                    });
-                    setSuggestions([]); setActiveIndex(-1);
-                  }}
-                  className={`flex-1 text-left px-2 py-3 text-sm truncate ${idx === activeIndex ? 'text-white' : 'text-white/90'}`}
-                  title={sug}
+          <div className="absolute top-[calc(100%+0.75rem)] left-0 right-0 bg-[#0f0f13]/95 backdrop-blur-3xl rounded-[24px] border border-white/10 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.6)] ring-1 ring-white/5 z-50 overflow-hidden thin-scroll overscroll-contain pointer-events-auto">
+            <div className="p-2 flex flex-col gap-0.5">
+              {isHistoryMode && (
+                <div className="flex items-center justify-between px-3 py-2 text-xs font-semibold text-white/40 uppercase tracking-wider mb-1">
+                  <span>Keçmiş axtarışlar</span>
+                  {history.length > 0 && (
+                    <button
+                      onMouseDown={(e) => { e.preventDefault(); }}
+                      onTouchStart={(e) => { e.preventDefault(); }}
+                      onClick={() => { setHistory([]); setSuggestions([]); try { localStorage.setItem('novEra.search.history', JSON.stringify([])); } catch {} }}
+                      className="px-2 py-1 rounded-md text-white/40 hover:text-white hover:bg-white/10 transition-colors"
+                    >
+                      Hamısını sil
+                    </button>
+                  )}
+                </div>
+              )}
+              {suggestions.map((sug, idx) => (
+                <div
+                  key={sug}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${idx === activeIndex ? 'bg-accent/20' : 'hover:bg-white/5'}`}
                 >
-                  {sug}
-                </button>
-                {isHistoryMode && (
+                  <SearchIcon className="w-4 h-4 text-white/30" />
                   <button
                     onMouseDown={(e) => { e.preventDefault(); }}
                     onTouchStart={(e) => { e.preventDefault(); }}
-                    onClick={(e) => { e.stopPropagation(); removeFromHistory(sug); }}
-                    className="ml-auto my-1 px-2 py-1 rounded-md text-xs text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/15"
-                    title="Sətiri sil"
-                    aria-label="Sətiri sil"
+                    onClick={() => {
+                      setQuery(sug);
+                      onSend(sug);
+                      setHistory(prev => {
+                        const cleaned = sug.slice(0, 200);
+                        let next = prev.filter(p => p.toLowerCase() !== cleaned.toLowerCase());
+                        next.unshift(cleaned);
+                        if (next.length > 20) next = next.slice(0, 20);
+                        try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch {}
+                        return next;
+                      });
+                      setSuggestions([]); setActiveIndex(-1);
+                    }}
+                    className={`flex-1 text-left text-[15px] font-medium truncate ${idx === activeIndex ? 'text-white' : 'text-white/80'}`}
+                    title={sug}
                   >
-                    ✕
+                    {sug}
                   </button>
-                )}
-              </div>
-            ))}
-            {isHistoryMode && suggestions.length === 0 && (
-              <div className="px-4 py-4 text-sm text-white/60">
-                Hələ keçmiş yoxdur. Axtarış edəndə burada görünəcək.
-              </div>
-            )}
+                  {isHistoryMode && (
+                    <button
+                      onMouseDown={(e) => { e.preventDefault(); }}
+                      onTouchStart={(e) => { e.preventDefault(); }}
+                      onClick={(e) => { e.stopPropagation(); removeFromHistory(sug); }}
+                      className="ml-auto w-6 h-6 flex items-center justify-center rounded-full text-white/30 hover:text-white hover:bg-white/10 transition-colors"
+                      title="Tarixçədən sil"
+                      aria-label="Tarixçədən sil"
+                    >
+                      <CloseIcon className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {isHistoryMode && suggestions.length === 0 && (
+                <div className="px-4 py-6 text-sm font-medium text-white/40 text-center">
+                  Hələ keçmiş yoxdur. Axtarış edəndə burada görünəcək.
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {/* Hidden inputs for uploads. fileInputRef uses capture to hint native camera on mobile */}
         <input ref={fileInputRef} type="file" onChange={handleFileUpload} className="hidden" accept="image/*" capture="environment" />
         <input ref={galleryInputRef} type="file" onChange={handleFileUpload} className="hidden" accept="image/*" capture={false} />
       </div>
-
     </div>
   );
 };

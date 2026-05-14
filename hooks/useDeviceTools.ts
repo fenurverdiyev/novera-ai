@@ -9,7 +9,7 @@ interface ContactProperties {
     name?: string[];
 }
 
-export const useDeviceTools = (addMessage: AddMessageFunc) => {
+export const useDeviceTools = (addMessage: AddMessageFunc, setUserMemory?: React.Dispatch<React.SetStateAction<string>>) => {
 
     const executeToolCalls = async (calls: ToolCall[]) => {
         for (const call of calls) {
@@ -38,6 +38,9 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
                         break;
                     case 'showMap':
                         await executeShowMap(call.args);
+                        break;
+                    case 'saveUserFact':
+                        await executeSaveUserFact(call.args);
                         break;
                     default:
                         console.warn(`Unknown tool call: ${call.name}`);
@@ -217,5 +220,23 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
         });
     };
 
+    const executeSaveUserFact = async (args: Record<string, any>) => {
+        const { fact } = args;
+        if (!fact || !setUserMemory) return;
+
+        setUserMemory(prev => {
+            const lines = prev ? prev.split('\n').filter(l => l.trim()) : [];
+            const trimmed = fact.trim();
+            if (lines.some(l => l.toLowerCase() === trimmed.toLowerCase())) return prev;
+            const updated = [...lines, trimmed].join('\n');
+            return updated;
+        });
+
+        addMessage({
+            role: 'model',
+            text: `🧠 Yadda saxladım: "${fact}"`
+        });
+    };
+
     return { executeToolCalls };
-};
+};

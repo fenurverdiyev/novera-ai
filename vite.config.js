@@ -4,7 +4,7 @@ export default {
     host: true,
     port: 5173,
     allowedHosts: [
-      "ashley-chelsea-disk-pros.trycloudflare.com"
+      "pajamas-borough-poison.ngrok-free.dev"
     ]
   }
 }

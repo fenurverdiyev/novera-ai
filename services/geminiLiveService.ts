@@ -139,12 +139,7 @@ export async function connectGeminiLive(options?: { model?: string; systemInstru
     const ORIGIN = (import.meta as any).env?.VITE_BACKEND_ORIGIN || (import.meta as any).env?.VITE_TTS_BACKEND_URL || '';
     const abs = ORIGIN ? [`${ORIGIN.replace(/\/$/, '')}/api/gemini-live-token`] : [];
     const tokenEndpoints = [
-      ...abs,
       '/api/gemini-live-token',
-      'http://localhost:8000/api/gemini-live-token',
-      'http://localhost:8001/api/gemini-live-token',
-      'http://127.0.0.1:8000/api/gemini-live-token',
-      'http://0.0.0.0:8000/api/gemini-live-token',
     ];
     let tokenResp: Response | null = null;
     for (const u of tokenEndpoints) {

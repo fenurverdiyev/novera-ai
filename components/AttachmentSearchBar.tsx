@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { SendIcon, LoadingSpinner, MicrophoneIcon, PlusIcon, LiveCircleIcon } from './Icons';
 import type { SearchMode } from '../types';
 import { suggestAutocomplete, detectLocaleForSearch } from '../services/searchService';
+import { getTranslation, Language } from '../utils/translations';
 
 interface SearchBarProps {
   onSend: (query: string, images?: string[]) => void;
@@ -9,9 +10,22 @@ interface SearchBarProps {
   onVoiceClick?: () => void; // Opens live conversation overlay
   searchMode: SearchMode;
   onChangeMode: (mode: SearchMode) => void;
+  disableSuggestions?: boolean;
+  language: Language;
+  isCentered?: boolean;
 }
 
-export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoiceClick, searchMode, onChangeMode }) => {
+export const SearchBar: React.FC<SearchBarProps> = ({ 
+  onSend, 
+  isLoading, 
+  onVoiceClick, 
+  searchMode, 
+  onChangeMode,
+  disableSuggestions = false,
+  language,
+  isCentered = false
+}) => {
+  const t = (key: any) => getTranslation(language, key);
   const [query, setQuery] = useState('');
   const [showUploadMenu, setShowUploadMenu] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -32,7 +46,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
       debounceRef.current = null;
     }
     const q = query.trim();
-    if (q.length < 2) {
+    if (q.length < 2 || disableSuggestions) {
       setSuggestions([]);
       setActiveIndex(-1);
       return;
@@ -169,73 +183,56 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
 
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-3 sm:px-4">
-      <div className="relative flex items-stretch bg-bg-slate rounded-2xl shadow-xl p-1.5 sm:p-2 border border-white/10">
-        <div className="hidden sm:flex items-center gap-3 pr-3 border-r border-white/10">
-          <div className="relative flex flex-col rounded-2xl overflow-hidden border border-white/15 bg-white/5 p-1 ring-1 ring-white/10">
+    <div className={`w-full transition-all duration-700 ${isCentered ? 'max-w-4xl mx-auto px-2 md:px-4' : 'max-w-4xl mx-auto px-2 md:px-6 mb-2 md:mb-4 animate-fade-in'}`}>
+      <div className={`relative flex flex-col md:flex-row items-stretch md:items-center glass-card rounded-[2rem] md:rounded-[2.5rem] p-1.5 md:p-3 border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-all duration-500 focus-within:border-cyan-400/30 focus-within:shadow-[0_0_40px_rgba(34,211,238,0.15)] focus-within:scale-[1.01] ${isCentered ? 'py-2 md:py-5' : ''}`}>
+        <div className="flex md:flex items-center gap-1 md:gap-1.5 px-2 md:px-3 mb-1.5 md:mb-0 md:border-r border-white/10 overflow-x-auto no-scrollbar py-1">
+          {(['base', 'universe', 'canvas'] as const).map((mode) => (
             <button
-              onClick={() => onChangeMode('base')}
-              className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${searchMode === 'base'
-                ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]'
-                : 'text-white/70 hover:text-white hover:bg-white/5'
-                }`}
+              key={mode}
+              onClick={() => onChangeMode(mode)}
+              className={`px-3 md:px-4 py-1.5 md:py-2 text-[9px] md:text-[11px] font-bold uppercase tracking-widest rounded-xl md:rounded-2xl transition-all whitespace-nowrap ${
+                searchMode === mode 
+                  ? 'bg-cyan-500 text-slate-900 shadow-[0_0_15px_rgba(34,211,238,0.4)]' 
+                  : 'text-slate-400 hover:text-white hover:bg-white/5'
+              }`}
             >
-              Base
+              {t(mode)}
             </button>
-            <button
-              onClick={() => onChangeMode('universe')}
-              className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${searchMode === 'universe'
-                ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]'
-                : 'text-white/70 hover:text-white hover:bg-white/5'
-                }`}
-            >
-              Universe
-            </button>
-            <button
-              onClick={() => onChangeMode('canvas')}
-              className={`relative px-3 py-2 text-xs text-left rounded-xl transition-colors ${searchMode === 'canvas'
-                ? 'text-white bg-accent/10 ring-1 ring-accent/50 shadow-[0_0_10px_rgba(88,166,255,0.35)]'
-                : 'text-white/70 hover:text-white hover:bg-white/5'
-                }`}
-            >
-              Canvas
-            </button>
-          </div>
+          ))}
         </div>
 
-        <div className="flex items-center flex-1 px-2 gap-2">
+        <div className="flex items-center flex-1 px-1 md:px-2 gap-1 md:gap-2">
           <div className="relative">
             <button
               onClick={() => setShowUploadMenu(!showUploadMenu)}
-              className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-              aria-label="Şəkil yüklə"
+              className="p-2 md:p-3 rounded-xl md:rounded-2xl text-slate-400 hover:text-white hover:bg-white/10 transition-all active:scale-90"
+              aria-label={t('uploadImage')}
             >
-              <PlusIcon className="w-5 h-5 md:w-6 md:h-6" />
+              <PlusIcon className="w-6 h-6" />
             </button>
             {showUploadMenu && (
-              <div className="absolute left-0 bottom-full mb-2 bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl border border-white/20 py-2 min-w-[180px] z-20 overflow-hidden">
-                {/* arrow */}
-                <div className="absolute left-4 -bottom-1 w-3 h-3 rotate-45 bg-white/10 border-l border-t border-white/20"></div>
+              <div className="absolute left-0 bottom-full mb-4 bg-[#0a0b14]/95 backdrop-blur-2xl rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-white/10 py-3 min-w-[220px] z-50 animate-fade-in overflow-hidden">
                 <button
                   onClick={() => { galleryInputRef.current?.click(); setShowUploadMenu(false); }}
-                  className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 transition-colors flex items-center gap-2"
+                  className="w-full text-left px-5 py-4 text-sm font-medium text-slate-300 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-3"
                 >
-                  <span>📷</span>
-                  <span>Kamera</span>
+                  <span className="text-xl">📸</span>
+                  <span>{t('camera')}</span>
                 </button>
                 <button
                   onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }}
-                  className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 transition-colors flex items-center gap-2"
+                  className="w-full text-left px-5 py-4 text-sm font-medium text-slate-300 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-3"
                 >
-                  <span>🖼️</span>
-                  <span>Qalereya</span>
+                  <span className="text-xl">🖼️</span>
+                  <span>{t('gallery')}</span>
                 </button>
+                <div className="h-px bg-white/5 mx-5 my-1" />
                 <button
                   onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }}
-                  className="w-full text-left px-4 py-3 text-sm text-white/90 hover:bg-white/15 transition-colors flex items-center gap-2"
+                  className="w-full text-left px-5 py-4 text-sm font-medium text-slate-300 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-3"
                 >
-                  <span>📁</span>
-                  <span>Fayl yüklə</span>
+                  <span className="text-xl">📁</span>
+                  <span>{t('file')}</span>
                 </button>
               </div>
             )}
@@ -264,10 +261,15 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="NovEra-dan soruşun..."
-              className={`w-full bg-transparent text-base md:text-lg text-white placeholder-gray-500 focus:outline-none px-3 ${isListening ? 'ring-1 ring-rose-400/60 rounded-lg' : ''}`}
+              placeholder={t('ask')}
+              className={`w-full bg-transparent text-[15px] md:text-lg text-white placeholder-slate-500 focus:outline-none px-2 md:px-4 py-2 md:py-3 ${isListening ? 'ring-2 ring-rose-500/40 rounded-2xl animate-pulse' : ''}`}
               disabled={isLoading}
               onFocus={() => { if (suggestions.length > 0) {/* show stays */ } }}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              data-form-type="other"
             />
             {suggestions.length > 0 && (
               <div className="absolute bottom-full left-0 mb-2 w-full bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 shadow-2xl z-20 overflow-auto sm:max-h-64 max-h-56">
@@ -288,33 +290,39 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSend, isLoading, onVoice
           </div>
         </div>
 
-        <div className="flex items-center gap-2 pl-3 border-l border-white/10">
+        <div className="flex items-center gap-1.5 px-2">
           <button
             onClick={toggleListening}
-            className={`p-2 rounded-full transition-colors ${isListening ? 'text-rose-300 bg-rose-500/10 ring-2 ring-rose-400/60 animate-pulse' : 'text-gray-300 hover:text-white hover:bg-white/10'}`}
-            aria-pressed={isListening}
-            aria-label="Səsi mətinə çevir"
-            title="Səsi mətinə çevir"
+            className={`p-2 md:p-3 rounded-xl md:rounded-2xl transition-all active:scale-90 ${
+              isListening 
+                ? 'bg-rose-500 text-white shadow-[0_0_20px_rgba(244,63,94,0.5)]' 
+                : 'text-slate-400 hover:text-rose-400 hover:bg-white/5'
+            }`}
+            title={t('stt')}
           >
             <MicrophoneIcon className="w-5 h-5 md:w-6 md:h-6" />
           </button>
 
-          {/* Live conversation trigger (hollow circle) */}
-          <button
-            onClick={() => onVoiceClick && onVoiceClick()}
-            className="p-2 rounded-full text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
-            aria-label="Canlı danışıq"
-            title="Canlı danışıq"
-          >
-            <LiveCircleIcon className="w-5 h-5 md:w-6 md:h-6" />
-          </button>
+          {onVoiceClick && (
+            <button
+              onClick={onVoiceClick}
+              className="p-3 rounded-2xl text-slate-400 hover:text-cyan-400 hover:bg-white/5 transition-all active:scale-90"
+              title={t('live')}
+            >
+              <LiveCircleIcon className="w-5 h-5 md:w-6 md:h-6" />
+            </button>
+          )}
 
           <button
-            onClick={handleSend}
+            onClick={() => handleSend()}
             disabled={isLoading || (!query.trim() && attachedImages.length === 0)}
-            className="p-2 rounded-full bg-accent text-white disabled:bg-gray-600 transition-colors flex items-center justify-center w-9 h-9 md:w-10 md:h-10"
+            className={`p-2 md:p-3 rounded-xl md:rounded-2xl transition-all active:scale-90 ${
+              (!query.trim() && attachedImages.length === 0) || isLoading
+                ? 'text-slate-600'
+                : 'bg-white text-slate-900 shadow-xl hover:bg-cyan-400'
+            }`}
           >
-            {isLoading ? <LoadingSpinner className="w-5 h-5 md:w-6 md:h-6" /> : <SendIcon className="w-5 h-5 md:w-6 md:h-6" />}
+            {isLoading ? <LoadingSpinner className="w-5 h-5" /> : <SendIcon className="w-5 h-5 md:w-6 md:h-6" />}
           </button>
         </div>
 

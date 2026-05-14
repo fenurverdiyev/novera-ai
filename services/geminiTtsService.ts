@@ -45,9 +45,12 @@ export async function geminiTts(text: string, opts: GeminiTTSOptions = {}): Prom
     voice_name: opts.voiceName || 'Kore',
   } as const;
 
+  // Use relative URL for mobile compatibility (via Vite proxy)
+  const VERTEX_URL = import.meta.env.VITE_VERTEX_PROXY_URL || '';
+
   let endpoints = [
-    // Always prefer same-origin /api proxy; this will work both on localhost and ngrok host
-    '/api/gemini-tts',
+    `${VERTEX_URL}/api/gemini-tts`,         // Vertex AI (əsas)
+    '/api/gemini-tts',                       // same-origin (Vite proxy → 8020)
     'http://127.0.0.1:8010/api/gemini-tts',
     'http://localhost:8010/api/gemini-tts',
     'http://0.0.0.0:8010/api/gemini-tts',
@@ -55,6 +58,7 @@ export async function geminiTts(text: string, opts: GeminiTTSOptions = {}): Prom
     'http://localhost:8000/api/gemini-tts',
     'http://0.0.0.0:8000/api/gemini-tts'
   ].filter(Boolean);
+
   try {
     const isHttps = typeof window !== 'undefined' && window.location && window.location.protocol === 'https:';
     if (isHttps) {
@@ -95,7 +99,7 @@ export async function geminiTts(text: string, opts: GeminiTTSOptions = {}): Prom
   }
   try {
     const KEY = ((import.meta as any).env?.VITE_GEMINI_TTS_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY || '').toString().trim();
-    const MODEL = ((import.meta as any).env?.VITE_GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts').toString();
+    const MODEL = ((import.meta as any).env?.VITE_GEMINI_TTS_MODEL || 'gemini-2.5-flash').toString();
     if (KEY) {
       const base = 'https://generativelanguage.googleapis.com';
       const primary = `${base}/v1beta/models/${encodeURIComponent(MODEL)}:generateContent?key=${encodeURIComponent(KEY)}`;
@@ -121,7 +125,7 @@ export async function geminiTts(text: string, opts: GeminiTTSOptions = {}): Prom
       }
       if (!r.ok && (r.status === 404 || r.status === 400)) {
         // try alt preview/native-audio models on v1beta
-        const altModels = ['gemini-2.5-flash-preview-tts', 'gemini-2.5-flash-native-audio-preview-09-2025'];
+        const altModels = ['gemini-2.5-flash', 'gemini-2.5-pro'];
         for (const am of altModels) {
           const altUrl = `${base}/v1beta/models/${encodeURIComponent(am)}:generateContent?key=${encodeURIComponent(KEY)}`;
           r = await tryFetch(altUrl, makeReq(true));

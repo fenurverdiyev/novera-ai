@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { translateText } from '../services/geminiService';
-import { LoadingSpinner, TranslateIcon, AlertTriangleIcon } from './Icons';
+import { LoadingSpinner, TranslateIcon, AlertTriangleIcon, CloseIcon } from './Icons';
 
 const languages = [
     { code: 'af', name: 'Afrikan dili', emoji: '🇿🇦' },
@@ -177,107 +177,112 @@ export const Translate: React.FC = () => {
     };
 
     return (
-        <div className="flex-grow overflow-y-auto p-8 pb-12 bg-bg-jet/90 backdrop-blur-sm relative isolate">
-            <h1 className="text-4xl font-bold text-text-main mb-8">Tərcümə</h1>
-            <div className="max-w-4xl mx-auto">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-end mb-6">
-                     <div>
-                        <label className="block text-sm font-medium text-text-sub mb-2">Mənbə Dili</label>
-                        <div className="w-full p-3 rounded-lg text-text-main bg-white/5 border border-white/10 backdrop-blur-sm">
+        <div className="flex-grow overflow-y-auto p-4 md:p-8 pb-32 md:pb-20 bg-bg-jet/90 backdrop-blur-sm relative isolate no-scrollbar">
+            <h1 className="text-2xl md:text-4xl font-bold text-white mb-6 md:mb-8 text-center md:text-left">Tərcümə</h1>
+            <div className="max-w-5xl mx-auto">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 items-end mb-6">
+                     <div className="flex flex-col gap-2">
+                        <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest ml-1">Mənbə Dili</label>
+                        <div className="w-full p-3.5 rounded-2xl text-white/90 bg-white/5 border border-white/10 backdrop-blur-xl font-medium text-sm">
                             Avtomatik Aşkarlama
                         </div>
                     </div>
-                     <div>
-                        <label className="block text-sm font-medium text-text-sub mb-2">Hədəf Dil</label>
+                     <div className="flex flex-col gap-2">
+                        <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest ml-1">Hədəf Dil</label>
                         <div ref={langRef} className="relative">
                           <button
                             type="button"
                             aria-expanded={langOpen}
                             onClick={() => setLangOpen(v => !v)}
-                            className="w-full p-3 rounded-lg text-text-main bg-white/5 border border-white/10 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-accent flex items-center justify-between"
+                            className="w-full p-3.5 rounded-2xl text-white bg-white/5 border border-white/10 backdrop-blur-xl focus:outline-none focus:ring-2 focus:ring-accent flex items-center justify-between transition-all active:scale-[0.98]"
                           >
-                            <span className="flex items-center gap-2">
-                              <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded border border-white/10 bg-white/10 text-white/80">{selectedLang.code}</span>
-                              <span className="text-base">{selectedLang.emoji}</span>
-                              <span>{selectedLang.name}</span>
+                            <span className="flex items-center gap-3">
+                              <span className="text-[10px] font-bold uppercase px-2 py-1 rounded-lg border border-white/10 bg-white/10 text-white/60">{selectedLang.code}</span>
+                              <span className="text-lg">{selectedLang.emoji}</span>
+                              <span className="font-bold">{selectedLang.name}</span>
                             </span>
-                            <svg className={`w-4 h-4 transition-transform duration-150 ${langOpen ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                            <svg className={`w-5 h-5 transition-transform duration-300 ${langOpen ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                           </button>
-                          <div className={`absolute top-full left-0 right-0 mt-2 z-40 bg-bg-onyx/90 border border-white/10 rounded-xl shadow-2xl backdrop-blur-md origin-top transition-all duration-120 ${langOpen ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-1 pointer-events-none'}`}>
-                            <div className="pointer-events-none relative h-[2px] overflow-hidden rounded-t-xl">
-                              <div className="absolute inset-y-0 left-0 w-1/3" style={{ background: 'linear-gradient(90deg, transparent, var(--color-accent), transparent)', animation: 'novShimmer 2.8s linear infinite' }} />
+                          
+                          {langOpen && (
+                            <div className="absolute top-full left-0 right-0 mt-3 z-50 bg-[#16161a]/95 border border-white/10 rounded-[24px] shadow-2xl backdrop-blur-3xl p-1 overflow-hidden animate-in fade-in zoom-in duration-200">
+                              <div className="max-h-[300px] overflow-y-auto p-1 custom-scrollbar">
+                                {languages.map(lang => (
+                                  <button
+                                    key={lang.code}
+                                    type="button"
+                                    onClick={() => { setTargetLang(lang.code); setLangOpen(false); }}
+                                    className={`w-full text-left px-4 py-3 rounded-xl hover:bg-white/10 text-white/90 flex items-center gap-3 transition-colors ${targetLang === lang.code ? 'bg-accent/20 text-accent ring-1 ring-accent/30' : ''}`}
+                                  >
+                                    <span className="text-[10px] font-bold uppercase px-2 py-1 rounded-lg border border-white/10 bg-white/10 text-white/60">{lang.code}</span>
+                                    <span className="text-lg">{lang.emoji}</span>
+                                    <span className="font-bold">{lang.name}</span>
+                                  </button>
+                                ))}
+                              </div>
                             </div>
-                            <div className="max-h-60 overflow-y-auto p-1">
-                              {languages.map(lang => (
-                                <button
-                                  key={lang.code}
-                                  type="button"
-                                  onClick={() => { setTargetLang(lang.code); setLangOpen(false); }}
-                                  className={`w-full text-left px-3 py-1.5 rounded-md hover:bg-white/15 text-white/90 flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-accent/30 ${targetLang === lang.code ? 'bg-white/10 ring-1 ring-accent/30' : ''}`}
-                                >
-                                  <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded border border-white/10 bg-white/10 text-white/80">{lang.code}</span>
-                                  <span className="mr-1">{lang.emoji}</span>
-                                  <span>{lang.name}</span>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
+                          )}
                         </div>
                     </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="relative">
-                    <textarea
-                        value={inputText}
-                        onChange={(e) => setInputText(e.target.value)}
-                        placeholder="Tərcümə etmək üçün mətni daxil edin..."
-                        className="w-full h-48 p-4 rounded-lg text-text-main placeholder-text-sub bg-white/5 border border-white/10 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-accent resize-none ring-1 ring-accent/25"
-                    />
-                    {/* Shimmer underline */}
-                    <div className="pointer-events-none absolute left-0 right-0 bottom-0 h-[2px] overflow-hidden">
-                      <div className="h-full w-1/3" style={{ background: 'linear-gradient(90deg, transparent, var(--color-accent), transparent)', animation: 'novShimmer 2.8s linear infinite' }} />
-                    </div>
-                    </div>
-                    <div className="relative">
-                    <div className="w-full h-48 p-4 rounded-lg text-text-main relative bg-white/5 border border-white/10 backdrop-blur-sm ring-1 ring-accent/25">
-                        {loading ? (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <LoadingSpinner className="w-8 h-8 text-accent"/>
-                            </div>
-                        ) : error ? (
-                             <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-red-400 p-4">
-                                <AlertTriangleIcon className="w-8 h-8 mb-2" />
-                                <span>{error}</span>
-                            </div>
-                        ) : (
-                            <p className="whitespace-pre-wrap">{translatedText || 'Tərcümə burada görünəcək...'}</p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+                    <div className="relative group">
+                      <textarea
+                          value={inputText}
+                          onChange={(e) => setInputText(e.target.value)}
+                          placeholder="Mətni daxil edin..."
+                          className="w-full h-40 md:h-64 p-5 rounded-[24px] text-white placeholder-white/30 bg-white/5 border border-white/10 backdrop-blur-xl focus:outline-none focus:ring-2 focus:ring-accent resize-none transition-all leading-relaxed text-base shadow-inner"
+                      />
+                      <div className="absolute bottom-4 right-4 flex items-center gap-2">
+                        {inputText.length > 0 && (
+                          <button onClick={() => setInputText('')} className="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 text-white/60 hover:bg-white/20 transition-colors">
+                            <CloseIcon className="w-4 h-4" />
+                          </button>
                         )}
+                      </div>
                     </div>
-                    {/* Shimmer underline */}
-                    <div className="pointer-events-none absolute left-0 right-0 bottom-0 h-[2px] overflow-hidden">
-                      <div className="h-full w-1/3" style={{ background: 'linear-gradient(90deg, transparent, var(--color-accent), transparent)', animation: 'novShimmer 2.8s linear infinite' }} />
-                    </div>
+
+                    <div className="relative group">
+                      <div className="w-full h-40 md:h-64 p-5 rounded-[24px] text-white relative bg-white/5 border border-white/10 backdrop-blur-xl ring-1 ring-accent/20 shadow-inner overflow-y-auto custom-scrollbar">
+                          {loading ? (
+                              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                                  <div className="w-10 h-10 border-4 border-accent border-t-transparent rounded-full animate-spin" />
+                                  <span className="text-xs font-bold text-accent animate-pulse">TƏRCÜMƏ EDİLİR...</span>
+                              </div>
+                          ) : error ? (
+                               <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-red-400 p-6">
+                                  <AlertTriangleIcon className="w-10 h-10 mb-3 opacity-50" />
+                                  <span className="font-bold text-sm">{error}</span>
+                              </div>
+                          ) : (
+                              <p className="whitespace-pre-wrap text-base leading-relaxed">{translatedText || 'Tərcümə burada görünəcək...'}</p>
+                          )}
+                      </div>
                     </div>
                 </div>
-                <div className="mt-6 flex justify-center">
+
+                <div className="mt-8 flex justify-center">
                     <button
                         type="button"
                         onClick={handleTranslate}
                         disabled={loading || !inputText.trim()}
-                        className="inline-flex items-center justify-center gap-2 px-6 py-3 min-w-[190px] rounded-full text-sm font-semibold border bg-white/10 text-white hover:bg-white/15 backdrop-blur-sm transition-colors disabled:opacity-90 disabled:cursor-not-allowed"
-                        style={{ borderColor: 'var(--color-accent)', boxShadow: '0 0 0 1px var(--color-accent) inset, 0 0 12px color-mix(in srgb, var(--color-accent), transparent 70%)' }}
+                        className="group relative inline-flex items-center justify-center gap-3 px-10 py-4 rounded-full text-sm font-bold text-white transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed overflow-hidden"
                     >
-                        <TranslateIcon className="w-5 h-5"/> Tərcümə Et
+                        <div className="absolute inset-0 bg-accent transition-transform group-hover:scale-105" />
+                        <div className="absolute inset-0 bg-gradient-to-r from-white/20 to-transparent" />
+                        <TranslateIcon className="relative w-5 h-5"/> 
+                        <span className="relative">TƏRCÜMƏ ET</span>
                     </button>
                 </div>
-                <style>{`
-                  @keyframes novShimmer {
-                    0% { transform: translateX(-50%); opacity: 0.25; }
-                    50% { opacity: 0.9; }
-                    100% { transform: translateX(150%); opacity: 0.25; }
-                  }
-                `}</style>
             </div>
+            
+            <style>{`
+              .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+              .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+              .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+              .no-scrollbar::-webkit-scrollbar { display: none; }
+            `}</style>
         </div>
     );
 };

@@ -284,7 +284,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   useEffect(() => {
     const check = () => {
       try {
-        const mq = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+        const mq = window.matchMedia && window.matchMedia('(max-width: 767px)').matches;
         const ua = navigator.userAgent || '';
         const uaMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(ua);
         setIsMobile(!!(mq || uaMobile));
@@ -630,7 +630,8 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
   const [aiExpanded, setAiExpanded] = useState(false);
   const [aiInput, setAiInput] = useState('');
   const [aiRendered, setAiRendered] = useState('');
-  const [aiUsedImages, setAiUsedImages] = useState<string[]>([]);
+   const [aiUsedImages, setAiUsedImages] = useState<string[]>([]);
+  const [aiUsedVideos, setAiUsedVideos] = useState<string[]>([]);
   const [aiImageModalUrl, setAiImageModalUrl] = useState<string | null>(null);
   const [aiShareHint, setAiShareHint] = useState<string | null>(null);
   const aiAnimRef = useRef<number | null>(null);
@@ -1073,6 +1074,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     setAiExpanded(false);
     setAiInput(qStr);
     setAiRendered('');
+    setAiUsedVideos([]);
     try {
       const useCSE = !!(GOOGLE_API_KEY && CX);
       const loc = detectLocaleForSearch();
@@ -1153,22 +1155,38 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       }
       setError(null);
 
-      // Image results
+      let finalImages: ImageResult[] = [];
       if (imgResp && imgResp.ok) {
         const imgData: ImageSearchResponse = await imgResp.json();
         if (imgData.items) {
-          setImageResults(imgData.items);
+          finalImages = imgData.items;
         }
       }
 
-      // Videos / News / Shopping
       if (visuals) {
         setVideoUrls(visuals.videos || []);
-        // Merge images if CSE returned none
-        if ((imageResults || []).length === 0 && (visuals.images || []).length) {
-          setImageResults(visuals.images.map((link) => ({ link, image: { thumbnailLink: link, contextLink: link }, title: '' })) as any);
+        // Merge images if CSE returned none or we want more
+        if (visuals.images && visuals.images.length > 0) {
+          const serperImgs = visuals.images.map((link) => ({
+            link,
+            image: { thumbnailLink: link, contextLink: link },
+            title: ''
+          })) as any;
+          
+          if (finalImages.length === 0) {
+            finalImages = serperImgs;
+          } else {
+            // Append unique ones
+            const existingLinks = new Set(finalImages.map(img => img.link));
+            for (const sImg of serperImgs) {
+              if (!existingLinks.has(sImg.link)) {
+                finalImages.push(sImg);
+              }
+            }
+          }
         }
       }
+      setImageResults(finalImages.slice(0, 50));
       if (nData) setNewsItems(nData);
       if (sData) setProducts(sData);
     } catch (e) {
@@ -1232,6 +1250,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       setAiRendered('');
       aiQueueRef.current = '';
       setAiExpanded(true);
+      setAiUsedVideos([]);
       // Start writer if not running
       const startWriter = () => {
         if (aiAnimRef.current) return;
@@ -1248,17 +1267,26 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
       };
       startWriter();
 
-      // Stream AI (analysis-only; no image generation)
+      // Stream AI with grounding and context (Google AI Mode style)
+      const contextUrl = overlayUrl || '';
       const analysisPref = [
-        'VACİB: Yalnız ŞƏKİL ANALİZİ et. Yeni şəkil yaratma/yüzdə dəyişiklik etmə (no image generation).',
-        'Veb axtarış etmə, yalnız verilən şəkil(lər) və mətnə əsaslan.',
-        'Cavabı Azərbaycan dilində ver. Mətn və ya ehtiyac varsa JSON formatında nəticə qaytara bilərsən.',
-      ].join(' ');
+        'Sizin adınız NovEra-dır. Siz NovEra şirkəti tərəfindən yaradılmış qabaqcıl süni intellekt köməkçisisiniz.',
+        'Siz hazırda NovEra Brauzerində "Ağıllı Analiz" rejimindəsiniz.',
+        contextUrl ? `İstifadəçi hazırda bu səhifəyə baxır: ${contextUrl}. Analiz zamanı bu səhifənin kontekstini nəzərə al.` : '',
+        'Məlumat toplamaq və sualları cavablandırmaq üçün Google Search grounding (veb axtarış) istifadə edin.',
+        'Saytlara daxil olun, ən son məlumatları tapın.',
+        'VACİB: Cavab mətnində [1], [2] kimi mənbə qeydlərindən istifadə etmə. Mənbələr onsuz da sistem tərəfindən ayrıca göstərilir.',
+        'Əgər istifadəçi şəkil və ya video istəsə, vebdən onları tapın və mətndə [image: URL] və ya [video: URL] formatında göstərin.',
+        'Cavabı həmişə Azərbaycan dilində verin.',
+      ].filter(Boolean).join(' ');
+
       // Compress images before sending to reduce 413/network errors
       const preparedImages = images && images.length ? await compressAll(images, 1280, 0.82) : [];
       setAiUsedImages(preparedImages || []);
       const srcSet = new Map<string, Source>();
-      for await (const chunk of streamChatQuery(`${analysisPref}\n\n${t || 'Bu şəkli analiz et.'}`, [], preparedImages || [], undefined, undefined, true)) {
+      
+      // analysisOnly set to false and forceGrounding set to true to allow grounding/tools
+      for await (const chunk of streamChatQuery(`${t || 'Bu şəkli və ya səhifəni analiz et.'}`, [], preparedImages || [], undefined, true, false, analysisPref)) {
         if (chunk.text) {
           aiQueueRef.current += chunk.text;
           startWriter();
@@ -1267,17 +1295,40 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
           for (const s of chunk.sources) { if (s.uri && !srcSet.has(s.uri)) srcSet.set(s.uri, s); }
           setAiSources(Array.from(srcSet.values()).slice(0, 8));
         }
+        if (chunk.images) {
+          setAiUsedImages(prev => Array.from(new Set([...prev, ...chunk.images!])));
+        }
+        if (chunk.videos) {
+          setAiUsedVideos(prev => Array.from(new Set([...prev, ...chunk.videos!])));
+        }
+        if (chunk.toolCalls) {
+          const webSearchCalls = chunk.toolCalls.filter((tc: any) => tc.functionCall?.name === 'webSearch');
+          if (webSearchCalls.length > 0) {
+            for (const call of webSearchCalls) {
+              const { query: qry, maxImages } = call.functionCall.args;
+              if (qry) {
+                // Background fetch for images if the AI requested them
+                searchImagesAndVideos(qry, maxImages || 6, 0).then(res => {
+                  if (res.images && res.images.length) {
+                    setAiUsedImages(prev => Array.from(new Set([...prev, ...res.images])));
+                  }
+                }).catch(() => {});
+              }
+            }
+          }
+        }
       }
       // After stream completes, commit final text
       setAiText(prev => prev || (aiRendered + aiQueueRef.current));
     } catch (e) {
-      // Retry once with stronger compression
+      // Retry once with stronger compression and broader prompt
       try {
         const t2 = (text || '').trim();
         const preparedImages2 = images && images.length ? await Promise.all(images.map((d) => compressDataUrl(d, 1024, 0.7))) : [];
         setAiUsedImages(preparedImages2 || []);
         const srcSet2 = new Map<string, Source>();
-        for await (const chunk of streamChatQuery(`Yenidən cəhd: ${t2 || 'Bu şəkli analiz et.'}`, [], preparedImages2 || [], undefined, undefined, true)) {
+        const retryPref = 'Siz NovEra AI-sınız. Veb axtarışdan istifadə edərək sualı cavablandırın.';
+        for await (const chunk of streamChatQuery(`${t2 || 'Analiz et.'}`, [], preparedImages2 || [], undefined, false, false, retryPref)) {
           if (chunk.text) { aiQueueRef.current += chunk.text; }
           if (chunk.sources) {
             for (const s of chunk.sources) { if (s.uri && !srcSet2.has(s.uri)) srcSet2.set(s.uri, s); }
@@ -1286,7 +1337,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         }
         setAiText(prev => prev || (aiRendered + aiQueueRef.current));
       } catch {
-        setAiText('AI analizi alınmadı. Şəbəkə və ya API açarı və ya şəkil ölçüsü problemi ola bilər. Xahiş olunur ki, bir az sonra yenidən cəhd edəsiniz.');
+        setAiText('AI analizi hazırda mümkün deyil. Zəhmət olmasa internet bağlantınızı və ya sorğunuzu yoxlayın.');
       }
     } finally {
       setAiLoading(false);
@@ -1542,22 +1593,22 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
     }
   }, [overlayUrl, overlayIncognito, isMobile]);
 
-  const headerHeight = isMobile ? 0 : 110; // px
-  const showDesktopHeader = !isMobile && !overlayShellOpen; // hide header when WebView overlay is open
+  const headerHeight = isMobile ? 120 : 110; // px
+  const showGlobalHeader = !overlayShellOpen && hasAnyResults; 
   const isBusy = !!(loading || overlayLoading);
   const mobileTabCount = overlayIncognito ? tabsIncog.length : tabsNormal.length;
   const [mobileTabSearch, setMobileTabSearch] = useState('');
   const [mobileTabOverflowOpen, setMobileTabOverflowOpen] = useState(false);
 
   return (
-    <div className={`relative ${(overlayShellOpen || overlayUrl || overlayIncognito) ? 'p-0' : 'p-4 md:p-6'} min-h-full text-text-main bg-bg-main/80 ${(overlayShellOpen || overlayUrl) ? '' : 'backdrop-blur-sm'}`} style={{ paddingTop: (!isMobile && showDesktopHeader) ? (headerHeight + 8) : undefined }}>
-      {isMobile && !(overlayShellOpen || overlayUrl) && (
+    <div className={`relative ${(overlayShellOpen || overlayUrl || overlayIncognito) ? 'p-0' : 'p-4 md:p-6'} min-h-full text-text-main bg-bg-main/80 ${(overlayShellOpen || overlayUrl) ? '' : 'backdrop-blur-sm'}`} style={{ paddingTop: showGlobalHeader ? (headerHeight + 8) : undefined }}>
+      {isMobile && !(overlayShellOpen || overlayUrl) && !showGlobalHeader && (
         <>
           <div className="fixed top-2 left-2 z-[20000] pointer-events-auto">
             <button
-              onClick={() => setPageMenuOpen(v => !v)}
+              onClick={(e) => { e.stopPropagation(); setPageMenuOpen(v => !v); }}
               aria-label="Menyu"
-              className="w-9 h-9 rounded-lg border border-white/20 bg-black/40 text-white/90 flex items-center justify-center backdrop-blur-md"
+              className="w-10 h-10 rounded-xl border border-white/20 bg-black/60 text-white/90 flex items-center justify-center backdrop-blur-xl shadow-lg active:scale-90 transition-transform pointer-events-auto"
             >
               <MenuIcon className="w-5 h-5" />
             </button>
@@ -1571,58 +1622,78 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
               {Math.max(1, mobileTabCount || 0)}
             </button>
           </div>
-          {pageMenuOpen && (
-            <div className="fixed top-12 left-2 z-[20010] min-w-[240px] rounded-2xl border border-white/20 bg-black/70 text-white/90 shadow-2xl backdrop-blur-md overflow-hidden">
-              <div className="absolute left-3 -top-1 w-3 h-3 rotate-45 bg-black/70 border-l border-t border-white/20"></div>
-              <button onClick={() => { dispatchNav('profile'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
-                <span>👤</span>
-                <span>Profil</span>
-              </button>
-              <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch { } setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
-                <span>🕶️</span>
-                <span>Anonim Tab</span>
-              </button>
-              <button onClick={() => { dispatchNav('safe-search'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
-                <span>🛡️</span>
-                <span>SafeSearch</span>
-              </button>
-              <button onClick={() => { dispatchNav('settings'); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
-                <span>⚙️</span>
-                <span>Ayarlar</span>
-              </button>
-              <div className="my-1 h-px bg-white/10" />
-              <div className="px-4 py-2 text-xs text-white/70 flex items-center justify-between">
-                <span>Axtarış tarixçəsi</span>
-                <span className="px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/70">Saxlanılır</span>
-              </div>
-              <button onClick={() => { clearSearchHistoryAll(); setPageMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-white/10 flex items-center gap-2">
-                <span>🗑️</span>
-                <span>Axtarışın hamısını sil</span>
-              </button>
-              <div className="my-1 h-px bg-white/10" />
-              <div className="px-4 py-3 flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full overflow-hidden bg-white/20 flex items-center justify-center text-white/80">
-                  {avatar ? <img src={avatar} alt="avatar" className="w-full h-full object-cover" /> : <span>🙂</span>}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs text-white/80 truncate">{authEmail || 'Hesab yoxdur'}</div>
-                  <button onClick={() => { dispatchNav('profile'); setPageMenuOpen(false); }} className="text-[11px] text-white/70 hover:text-white">Hesabı idarə et</button>
-                </div>
-              </div>
-              <div className="my-1 h-px bg-white/10" />
-              <div className="px-4 py-2 text-xs text-white/70">Görünüş</div>
-              <div className="px-3 pb-2 flex items-center gap-2">
-                {([{ id: 'light', label: 'Ağ rejim' }, { id: 'dark', label: 'Tünd rejim' }, { id: 'system', label: 'Sistem' }] as const).map(opt => (
-                  <button key={opt.id}
-                    onClick={() => { setOverlayTheme(opt.id as any); }}
-                    className={`px-3 py-1.5 rounded-full text-xs border ${overlayTheme === opt.id ? 'bg-white/20 text-white border-white/40' : 'bg-white/5 text-white/80 hover:bg-white/10 border-white/20'}`}
-                  >{opt.label}</button>
-                ))}
-              </div>
-            </div>
-          )}
         </>
       )}
+      {isMobile && pageMenuOpen && (
+        <div className="fixed inset-0 z-[22000] flex items-start justify-start p-4 pointer-events-none animate-in fade-in duration-300">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm pointer-events-auto" onClick={() => setPageMenuOpen(false)} />
+          <div className={`relative w-[280px] rounded-[28px] border border-white/10 bg-[#0f0f13]/95 backdrop-blur-2xl shadow-2xl pointer-events-auto overflow-hidden animate-in slide-in-from-left-4 duration-300 ${showGlobalHeader ? 'mt-14' : 'mt-12'}`}>
+            <div className="p-4 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
+              <div className="flex items-center gap-2">
+                <Logo isLarge={false} className="w-5 h-5" />
+                <span className="font-bold text-sm text-white/90">NovEra Menyu</span>
+              </div>
+              <button onClick={() => setPageMenuOpen(false)} className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 text-white/60">
+                <CloseIcon className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 flex flex-col gap-1 max-h-[70vh] overflow-y-auto no-scrollbar">
+              <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-clear-all' as any)); } catch { } setPageMenuOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-bold text-accent bg-accent/10 hover:bg-accent/20 transition-all">
+                <PlusIcon className="w-5 h-5" />
+                <span>Yeni Söhbət</span>
+              </button>
+
+              <div className="my-2 h-px bg-white/5 mx-2" />
+
+              <button onClick={() => { dispatchNav('search'); setPageMenuOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-medium text-white/80 hover:bg-white/5 transition-all">
+                <span className="text-xl">✨</span>
+                <span>AI Axtarış</span>
+              </button>
+
+              <button onClick={() => { dispatchNav('news'); setPageMenuOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-medium text-white/80 hover:bg-white/5 transition-all">
+                <span className="text-xl">📰</span>
+                <span>Xəbər / Analiz</span>
+              </button>
+
+              <button onClick={() => { dispatchNav('translate'); setPageMenuOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-medium text-white/80 hover:bg-white/5 transition-all">
+                <span className="text-xl">🔤</span>
+                <span>Tərcümə</span>
+              </button>
+
+              <button onClick={() => { try { window.dispatchEvent(new Event('nov-era-open-incognito' as any)); } catch { } setPageMenuOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-medium text-white/80 hover:bg-white/5 transition-all">
+                <span className="text-xl">🕶️</span>
+                <span>Anonim Rejim</span>
+              </button>
+
+              <div className="my-2 h-px bg-white/5 mx-2" />
+
+              <button onClick={() => { dispatchNav('profile'); setPageMenuOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-medium text-white/80 hover:bg-white/5 transition-all">
+                <span className="text-xl">👤</span>
+                <span>Profil</span>
+              </button>
+
+              <button onClick={() => { dispatchNav('settings'); setPageMenuOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-medium text-white/80 hover:bg-white/5 transition-all">
+                <span className="text-xl">⚙️</span>
+                <span>Ayarlar</span>
+              </button>
+
+              <button onClick={() => { dispatchNav('safe-search'); setPageMenuOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-medium text-white/80 hover:bg-white/5 transition-all">
+                <span className="text-xl">🛡️</span>
+                <span>SafeSearch</span>
+              </button>
+            </div>
+
+            <div className="p-4 border-t border-white/5 bg-white/[0.01]">
+              <div className="flex items-center justify-between text-[10px] text-white/30 font-bold uppercase tracking-widest">
+                <span>Versiya 2.5.0</span>
+                <span>© 2026 NovEra</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Global top-left hamburger (desktop header only) */}
       {!isMobile && !(overlayShellOpen || overlayUrl) && (
         <div className="fixed left-2 top-2 z-[20000]">
@@ -1685,87 +1756,93 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
           </div>
         </div>
       )}
-      {/* Desktop persistent header (omnibox + tabs), fixed at top */}
-      {showDesktopHeader && (
-        <div className="fixed left-0 right-0 top-0 z-[10000]">
-          <div className="px-3 md:px-6">
-            <div className="max-w-6xl mx-auto flex flex-col">
-              {/* Row 1: Tab strip (moved above omnibox) */}
-              <div className="order-1 mt-0 flex items-center gap-2 rounded-2xl backdrop-blur-2xl bg-white/8 border border-white/15 shadow-md px-2 py-1.5">
-                <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pr-2">
-                  {(() => {
-                    const list = overlayIncognito ? tabsIncog : tabsNormal; const activeId = overlayIncognito ? activeTabIdIncog : activeTabIdNormal; return list.map(t => {
-                      const active = t.id === activeId; const fav = t.url ? `https://www.google.com/s2/favicons?domain=${getHost(t.url)}&sz=32` : ''; return (
-                        <div key={t.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-t-xl border ${active ? 'bg-white/10 border-white/20' : 'bg-white/5 hover:bg-white/10 border-white/10'}`}>
-                          <button onClick={() => switchToTab(t.id)} className="flex items-center gap-2 min-w-0">
-                            {t.url ? (
-                              <img src={fav} className="w-4 h-4" />
-                            ) : (
-                              <div className="relative w-4 h-4 rounded-full bg-white/5 border border-white/15 flex items-center justify-center">
-                                {active && isBusy && (<div className="absolute inset-0 rounded-full border border-white/30 border-t-white animate-spin"></div>)}
-                                {overlayIncognito ? (
-                                  <span className="text-[10px] leading-4 font-semibold text-white/90">🕶️</span>
-                                ) : (
-                                  <span className="text-[10px] leading-4 font-semibold bg-gradient-to-r from-cyan-200 via-white to-white text-transparent bg-clip-text">N</span>
-                                )}
-                              </div>
-                            )}
-                            <span className="text-xs text-white/90 truncate max-w-[18ch]">{t.title || 'Yeni Tab'}</span>
-                          </button>
-                          <button onClick={() => closeTabById(t.id)} className="text-white/70 hover:text-white" title="Bağla"><CloseIcon className="w-3.5 h-3.5" /></button>
-                        </div>
-                      );
-                    });
-                  })()}
-                  <button onClick={openNewTabLocal} className="p-1.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/15" title="Yeni tab"><PlusIcon className="w-4 h-4 text-white/90" /></button>
+      {/* Desktop persistent header (omnibox + tabs), floating unified island */}
+      {showGlobalHeader && (
+        <div className="fixed left-0 right-0 top-2 md:top-4 z-[10000] pointer-events-none">
+          <div className="max-w-5xl mx-auto px-2 md:px-4 pointer-events-auto">
+            <div className="flex flex-col rounded-[20px] md:rounded-[24px] bg-[#0f0f13]/90 backdrop-blur-3xl border border-white/10 shadow-2xl ring-1 ring-white/5 overflow-hidden transition-all duration-300">
+              {/* Branding & Tabs Row */}
+              <div className="flex items-center gap-3 px-4 py-2 border-b border-white/5 bg-white/[0.02]">
+                <div className="flex items-center gap-2 pr-2 border-r border-white/10 shrink-0">
+                  {isMobile && (
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); setPageMenuOpen(v => !v); }}
+                      className="w-10 h-10 flex items-center justify-center rounded-xl bg-white/10 text-white shadow-md active:scale-90 transition-transform border border-white/10 pointer-events-auto"
+                      aria-label="Menyu"
+                    >
+                      <MenuIcon className="w-5 h-5" />
+                    </button>
+                  )}
+                  <Logo isLarge={false} className="w-5 h-5" />
+                  {!isMobile && <span className="font-bold text-sm bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">NovEra</span>}
                 </div>
+                <div className="flex-1 flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+                {(() => {
+                  const list = overlayIncognito ? tabsIncog : tabsNormal;
+                  const activeId = overlayIncognito ? activeTabIdIncog : activeTabIdNormal;
+                  return list.map(t => {
+                    const active = t.id === activeId;
+                    const fav = t.url ? `https://www.google.com/s2/favicons?domain=${getHost(t.url)}&sz=32` : '';
+                    return (
+                      <div key={t.id} className={`group flex items-center gap-2 px-3 py-1.5 rounded-full transition-all duration-200 cursor-default ${active ? 'bg-white/15 text-white shadow-inner border border-white/10' : 'bg-transparent text-white/60 hover:bg-white/5 hover:text-white border border-transparent'}`}>
+                        <button onClick={() => switchToTab(t.id)} className="flex items-center gap-2 min-w-0 flex-1">
+                          {t.url ? (
+                            <img src={fav} className="w-4 h-4 rounded-full" />
+                          ) : (
+                            <div className={`relative w-4 h-4 rounded-full flex items-center justify-center ${active ? 'bg-white/20' : 'bg-white/10'}`}>
+                              {active && isBusy && (<div className="absolute inset-0 rounded-full border border-white/30 border-t-white animate-spin"></div>)}
+                              {overlayIncognito ? (
+                                <span className="text-[9px] leading-4 font-bold text-white/90">🕶️</span>
+                              ) : (
+                                <span className="text-[10px] leading-4 font-bold text-blue-300">N</span>
+                              )}
+                            </div>
+                          )}
+                          <span className="text-xs font-medium truncate max-w-[14ch]">{t.title || 'Yeni Tab'}</span>
+                        </button>
+                        <button onClick={() => closeTabById(t.id)} className={`w-4 h-4 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${active ? 'hover:bg-white/20' : 'hover:bg-white/20'}`} title="Bağla">
+                          <CloseIcon className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    );
+                  });
+                })()}
+                <button onClick={openNewTabLocal} className="w-7 h-7 rounded-full flex items-center justify-center bg-white/5 hover:bg-white/15 transition-colors border border-white/10 text-white/80" title="Yeni tab">
+                  <PlusIcon className="w-3.5 h-3.5" />
+                </button>
               </div>
-              {/* Row 2: Omnibox (moved below) */}
-              <div className="order-2 mt-2 flex items-center gap-2 rounded-2xl backdrop-blur-2xl bg-white/8 border border-white/15 shadow-md px-2 py-2">
+
+              </div>
+
+              {/* Omnibox / Search Row */}
+              <div className="flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-2.5 relative">
                 <div className="flex items-center gap-1">
                   {(() => {
                     const backDisabled = overlayUrl ? (overlayIndex <= 0) : (!results.length);
                     const forwardDisabled = overlayUrl ? (overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) : (!results.length ? !forwardFromLobby : (resultsIndex < 0 || resultsIndex >= resultsHistory.length - 1));
                     return (
                       <>
-                        <button
-                          onClick={handleGlobalBack}
-                          disabled={backDisabled}
-                          className={`p-2 rounded-lg border ${backDisabled ? 'bg-white/5 text-white/40 cursor-not-allowed border-white/10' : 'bg-white/10 text-white/80 hover:bg-white/15 border-white/15'}`}
-                          title="Geri"
-                        >
+                        <button onClick={handleGlobalBack} disabled={backDisabled} className={`w-8 h-8 flex items-center justify-center rounded-full transition-colors ${backDisabled ? 'text-white/20 cursor-not-allowed' : 'text-white/70 hover:text-white hover:bg-white/10'}`} title="Geri">
                           <ArrowLeftIcon className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={handleGlobalForward}
-                          disabled={forwardDisabled}
-                          className={`p-2 rounded-lg border ${forwardDisabled ? 'bg-white/5 text-white/40 cursor-not-allowed border-white/10' : 'bg-white/10 text-white/80 hover:bg-white/15 border-white/15'}`}
-                          title="İrəli"
-                        >
+                        <button onClick={handleGlobalForward} disabled={forwardDisabled} className={`w-8 h-8 flex items-center justify-center rounded-full transition-colors ${forwardDisabled ? 'text-white/20 cursor-not-allowed' : 'text-white/70 hover:text-white hover:bg-white/10'}`} title="İrəli">
                           <ArrowRightIcon className="w-4 h-4" />
                         </button>
-                        <button
-                          disabled={!overlayUrl}
-                          onClick={reloadOverlay}
-                          className={`p-2 rounded-lg border ${!overlayUrl ? 'bg-white/5 text-white/40 cursor-not-allowed border-white/10' : 'bg-white/10 text-white/80 hover:bg-white/15 border-white/15'}`}
-                          title="Yenilə"
-                        >
+                        <button disabled={!overlayUrl} onClick={reloadOverlay} className={`w-8 h-8 flex items-center justify-center rounded-full transition-colors ${!overlayUrl ? 'text-white/20 cursor-not-allowed' : 'text-white/70 hover:text-white hover:bg-white/10'}`} title="Yenilə">
                           <RefreshIcon className="w-4 h-4" />
                         </button>
                       </>
                     );
                   })()}
                 </div>
-                <div className="flex-1 min-w-0 relative">
-                  <div className="flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-full bg-white/8 border border-white/15 backdrop-blur-xl ring-1 ring-white/10 shadow-[0_4px_16px_rgba(0,0,0,.25)]">
-                    <div className="relative w-7 h-7 rounded-full bg-white/10 border border-white/15 flex items-center justify-center font-semibold">
-                      {isBusy && (<div className="absolute inset-0 rounded-full border-2 border-white/25 border-t-white/80 animate-spin"></div>)}
-                      {overlayIncognito ? (
-                        <span className="text-white/90">🕶️</span>
-                      ) : (
-                        <span className="bg-gradient-to-r from-cyan-200 via-white to-white text-transparent bg-clip-text">N</span>
-                      )}
-                    </div>
+
+                <div className="flex-1 min-w-0 relative flex items-center">
+                  <div className="flex-1 flex items-center gap-2 px-4 py-2 rounded-full bg-black/40 border border-white/10 ring-1 ring-black/20 shadow-inner focus-within:ring-accent/50 focus-within:border-accent/40 transition-all">
+                    {overlayIncognito ? (
+                      <span className="text-white/50 text-sm">🕶️</span>
+                    ) : (
+                      <SearchIcon className="w-4 h-4 text-white/50" />
+                    )}
                     <input
                       type="text"
                       value={hbQuery}
@@ -1783,161 +1860,183 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                         else if (e.key === 'ArrowUp' && hbSuggestions.length > 0) { e.preventDefault(); setHbActiveIndex((i) => (i <= 0 ? hbSuggestions.length - 1 : i - 1)); }
                         else if (e.key === 'Escape') { setHbSuggestions([]); setHbActiveIndex(-1); }
                       }}
-                      placeholder="Axtar..."
-                      className="flex-1 min-w-0 bg-transparent outline-none text-base md:text-lg text-white/90 placeholder-white/70 px-1.5 py-2"
+                      placeholder={overlayIncognito ? "Anonim axtarış..." : "Axtarış və ya URL daxil edin..."}
+                      className="flex-1 min-w-0 bg-transparent outline-none text-[15px] font-medium text-white/90 placeholder-white/40"
                     />
-                    <div className="ml-auto flex items-center gap-1.5">
-                      {/* SafeSearch Dropdown (Desktop) */}
-                      <div className="relative mr-2">
-                        <button
-                          onClick={() => setSafeSearchDropdownOpen(!safeSearchDropdownOpen)}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border transition-all text-xs font-medium ${safeSearchMode !== 'off' ? 'bg-accent/15 border-accent/30 text-white' : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'}`}
-                        >
-                          <span>🛡️</span>
-                          <span>{safeSearchMode === 'filter' ? 'Filtr: Aktiv' : safeSearchMode === 'blur' ? 'Bulanıqlıq' : 'SafeSearch'}</span>
-                          <span className={`transition-transform duration-200 ${safeSearchDropdownOpen ? 'rotate-180' : ''}`}>▼</span>
-                        </button>
-                        {safeSearchDropdownOpen && (
-                          <div className="absolute top-full right-0 mt-2 w-56 bg-black/90 backdrop-blur-2xl border border-white/15 rounded-2xl shadow-2xl z-[100] py-2 overflow-hidden animate-in fade-in zoom-in duration-200">
-                            <div className="px-4 py-2 text-[11px] text-white/50 uppercase tracking-wider font-bold">SafeSearch Rejimi</div>
-                            {(['filter', 'blur', 'off'] as const).map(m => (
-                              <button
-                                key={m}
-                                onClick={() => {
-                                  try { window.dispatchEvent(new CustomEvent('nov-era-safe-search-changed', { detail: m })); } catch { }
-                                  setSafeSearchDropdownOpen(false);
-                                }}
-                                className={`w-full text-left px-4 py-2.5 text-sm transition-colors flex items-center justify-between ${safeSearchMode === m ? 'bg-accent/20 text-white' : 'text-white/80 hover:bg-white/10'}`}
-                              >
-                                <span>{m === 'filter' ? 'Filtr' : m === 'blur' ? 'Bulanıqlıq' : 'Deaktiv'}</span>
-                                {safeSearchMode === m && <span className="text-accent">✓</span>}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {hbQuery.trim().length > 0 && (
-                        <button
-                          onClick={() => { setHbQuery(''); setHbSuggestions([]); setHbActiveIndex(-1); }}
-                          className="p-1.5 rounded-md bg-white/5 hover:bg-white/10 text-white/80 hover:text-white border border-white/15"
-                          title="Təmizlə"
-                          aria-label="Təmizlə"
-                        >
-                          <CloseIcon className="w-4 h-4" />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => { if (hbQuery.trim().length > 0) submitHeader(); }}
-                        disabled={hbQuery.trim().length === 0}
-                        className={`w-9 h-9 rounded-full flex items-center justify-center border ring-1 ${hbQuery.trim().length === 0 ? 'bg-white/5 text-white/40 cursor-not-allowed border-white/10 ring-white/5' : 'bg-white/10 text-white/90 hover:bg-white/15 border-white/25 ring-white/10'}`}
-                        title="Axtar"
-                        aria-label="Axtar"
-                      >
-                        <SearchIcon className="w-4 h-4" />
+                    {hbQuery.trim().length > 0 && (
+                      <button onClick={() => { setHbQuery(''); setHbSuggestions([]); setHbActiveIndex(-1); }} className="w-5 h-5 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 text-white/70" title="Təmizlə">
+                        <CloseIcon className="w-3 h-3" />
                       </button>
-                    </div>
+                    )}
                   </div>
+                  
                   {(hbFocused && hbSuggestions.length > 0) && (
-                    <div className="absolute top-[calc(100%+0.5rem)] left-0 right-0 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 shadow-2xl ring-1 ring-black/10 z-40 overflow-auto max-h-[60vh]">
-                      {hbSuggestions.map((sug, idx) => {
-                        const isActive = idx === hbActiveIndex;
-                        const isHistory = hbQuery.trim().length < 2 && hbHistory.some(h => h === sug);
-                        return (
-                          <div key={sug} className={`w-full flex items-center gap-2 px-2 ${isActive ? 'bg-accent/20' : 'hover:bg-white/15'} transition-colors`}>
-                            <button
-                              onMouseDown={(e) => { e.preventDefault(); }}
-                              onClick={() => submitHeader(sug)}
-                              className={`flex-1 text-left px-2 py-3 text-sm truncate ${isActive ? 'text-white' : 'text-white/90'}`}
-                              title={sug}
-                            >
-                              {sug}
-                            </button>
-                            {isHistory && (
+                    <div className="absolute top-[calc(100%+0.75rem)] left-0 right-0 bg-[#16161a]/95 backdrop-blur-3xl rounded-2xl border border-white/10 shadow-2xl z-40 overflow-hidden">
+                      <div className="p-2 flex flex-col gap-0.5">
+                        {hbSuggestions.map((sug, idx) => {
+                          const isActive = idx === hbActiveIndex;
+                          const isHistory = hbQuery.trim().length < 2 && hbHistory.some(h => h === sug);
+                          return (
+                            <div key={sug} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-colors ${isActive ? 'bg-accent/20' : 'hover:bg-white/5'}`}>
+                              <SearchIcon className="w-4 h-4 text-white/40" />
                               <button
                                 onMouseDown={(e) => { e.preventDefault(); }}
-                                onClick={(e) => { e.stopPropagation(); setHbHistory(prev => { const next = prev.filter(p => p.toLowerCase() !== sug.toLowerCase()); try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch { } return next; }); setHbSuggestions(prev => prev.filter(p => p !== sug)); setHbActiveIndex(-1); }}
-                                className="ml-auto my-1 px-2 py-1 rounded-md text-xs text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/15"
-                                title="Sətiri sil"
-                                aria-label="Sətiri sil"
+                                onClick={() => submitHeader(sug)}
+                                className={`flex-1 text-left text-sm font-medium truncate ${isActive ? 'text-white' : 'text-white/80'}`}
+                                title={sug}
                               >
-                                ✕
+                                {sug}
                               </button>
-                            )}
-                          </div>
-                        );
-                      })}
+                              {isHistory && (
+                                <button
+                                  onMouseDown={(e) => { e.preventDefault(); }}
+                                  onClick={(e) => { e.stopPropagation(); setHbHistory(prev => { const next = prev.filter(p => p.toLowerCase() !== sug.toLowerCase()); try { localStorage.setItem('novEra.search.history', JSON.stringify(next)); } catch { } return next; }); setHbSuggestions(prev => prev.filter(p => p !== sug)); setHbActiveIndex(-1); }}
+                                  className="ml-auto w-6 h-6 flex items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors"
+                                  title="Tarixçədən sil"
+                                >
+                                  <CloseIcon className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
-                  {/* Local thin scrollbar style */}
-                  <style>
-                    {`.no-scrollbar::-webkit-scrollbar{display:none}`}
-                  </style>
+                </div>
+
+                {/* SafeSearch Dropdown */}
+                <div className="relative">
+                  <button onClick={() => setSafeSearchDropdownOpen(!safeSearchDropdownOpen)} className={`flex items-center justify-center w-10 h-10 rounded-full transition-all border ${safeSearchMode !== 'off' ? 'bg-accent/20 border-accent/40 text-accent' : 'bg-transparent border-transparent text-white/50 hover:bg-white/5 hover:text-white/80'}`} title="SafeSearch">
+                    <span className="text-lg leading-none">🛡️</span>
+                  </button>
+                  {safeSearchDropdownOpen && (
+                    <div className="absolute top-[calc(100%+0.5rem)] right-0 w-48 bg-[#16161a]/95 backdrop-blur-3xl border border-white/10 rounded-2xl shadow-2xl z-[100] p-1 overflow-hidden animate-in fade-in zoom-in duration-200">
+                      {(['filter', 'blur', 'off'] as const).map(m => (
+                        <button key={m} onClick={() => { try { window.dispatchEvent(new CustomEvent('nov-era-safe-search-changed', { detail: m })); } catch { } setSafeSearchDropdownOpen(false); }} className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center justify-between ${safeSearchMode === m ? 'bg-accent/20 text-white' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+                          <span>{m === 'filter' ? 'Tam Filtr' : m === 'blur' ? 'Bulanıqlıq' : 'Deaktiv'}</span>
+                          {safeSearchMode === m && <span className="text-accent text-lg leading-none">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
-              {/* (Tab strip moved above) */}
             </div>
+            {/* Local thin scrollbar style */}
+            <style>
+              {`.no-scrollbar::-webkit-scrollbar{display:none}`}
+            </style>
           </div>
         </div>
       )}
       {isMobile && showTabSwitcher && (
-        <div className={`fixed inset-0 z-[21000] bg-black text-white flex flex-col transition-opacity duration-200 ease-out opacity-100`}>
-          <div className="relative px-3 pt-[env(safe-area-inset-top)] pb-2 flex items-center justify-center">
-            <div className={`inline-flex items-center gap-2 px-1.5 py-1 rounded-full shadow-xl ring-1 bg-white/5 border border-white/15 ring-black/20`}>
-              <button onClick={() => { openNewTabLocal(); setShowTabSwitcher(false); }} className={`w-9 h-9 rounded-full flex items-center justify-center active:scale-95 transition-transform bg-white/10 hover:bg-white/15 border border-white/20`}>
-                <PlusIcon className="w-5 h-5" />
-              </button>
-              <div className={`w-10 h-9 rounded-lg flex items-center justify-center text-sm font-semibold bg-white/10 border border-white/20`}>
-                {Math.max(1, mobileTabCount || 0)}
+        <div className="fixed inset-0 z-[21000] bg-bg-jet text-white flex flex-col animate-in fade-in slide-in-from-bottom duration-300">
+          {/* Header */}
+          <div className="px-6 pt-[env(safe-area-inset-top)] pb-4 flex items-center justify-between border-b border-white/5 bg-white/2 backdrop-blur-xl">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg ${overlayIncognito ? 'bg-white/10 text-white/90' : 'bg-accent/20 text-accent'}`}>
+                {overlayIncognito ? '🕶️' : 'N'}
               </div>
-              <button onClick={() => setMobileTabOverflowOpen(v => !v)} className={`w-9 h-9 rounded-full flex items-center justify-center active:scale-95 transition-transform bg-white/10 hover:bg-white/15 border border-white/20`} aria-label="Menyu">
-                <MenuIcon className="w-5 h-5" />
+              <div>
+                <h2 className="text-lg font-bold leading-tight">{overlayIncognito ? 'Anonim Tablar' : 'Tablar'}</h2>
+                <p className="text-[11px] text-white/50 uppercase tracking-widest font-bold">{mobileTabCount} AKTİV</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => { openNewTabLocal(); setShowTabSwitcher(false); }}
+                className="w-10 h-10 rounded-full bg-accent text-white flex items-center justify-center shadow-lg shadow-accent/20 active:scale-90 transition-transform"
+              >
+                <PlusIcon className="w-6 h-6" />
+              </button>
+              <button 
+                onClick={() => setShowTabSwitcher(false)}
+                className="w-10 h-10 rounded-full bg-white/5 text-white/70 flex items-center justify-center border border-white/10"
+              >
+                <CloseIcon className="w-5 h-5" />
               </button>
             </div>
-            {mobileTabOverflowOpen && (
-              <div className={`fixed right-3 top-[calc(env(safe-area-inset-top)+52px)] z-[21010] min-w-[200px] rounded-2xl overflow-hidden shadow-2xl bg-black/90 border border-white/20 text-white`}>
-                <button onClick={() => { setOverlayIncognito(true); setTabsIncog(prev => { if (prev.length) return prev; const nt = makeNewTab(null); setActiveTabIdIncog(nt.id); return [nt]; }); setMobileTabOverflowOpen(false); setShowTabSwitcher(true); }} className={`w-full text-left px-4 py-3 text-sm hover:bg-white/10`}>Anonim Tab</button>
-                <button onClick={() => { dispatchNav('settings'); setMobileTabOverflowOpen(false); }} className={`w-full text-left px-4 py-3 text-sm hover:bg-white/10`}>Ayarlar</button>
-                <button onClick={() => { dispatchNav('safe-search'); setMobileTabOverflowOpen(false); }} className={`w-full text-left px-4 py-3 text-sm hover:bg-white/10`}>SafeSearch</button>
-                <button onClick={() => { setShowTabSwitcher(false); setMobileTabOverflowOpen(false); }} className={`w-full text-left px-4 py-3 text-sm hover:bg-white/10`}>Bağla</button>
-              </div>
-            )}
-            <button
-              onClick={() => setShowTabSwitcher(false)}
-              className={`absolute right-3 top-2 z-[21005] w-9 h-9 rounded-full flex items-center justify-center bg-white/10 hover:bg-white/15 border border-white/20`}
-              aria-label="Bağla"
-              title="Bağla"
-            >
-              <CloseIcon className="w-5 h-5" />
-            </button>
           </div>
-          <div className="px-3 pb-2">
-            <input value={mobileTabSearch} onChange={(e) => setMobileTabSearch(e.target.value)} placeholder="Tabları axtarın" className={`w-full px-4 py-2 rounded-full outline-none bg-black/40 border border-white/15 placeholder-white/60`} />
+
+          {/* Search & Mode Toggle */}
+          <div className="px-4 py-4 flex flex-col gap-4">
+            <div className="relative">
+              <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
+              <input 
+                value={mobileTabSearch} 
+                onChange={(e) => setMobileTabSearch(e.target.value)} 
+                placeholder="Tabları axtarın..." 
+                className="w-full bg-white/5 border border-white/10 rounded-2xl pl-11 pr-4 py-3 text-sm focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-all"
+              />
+            </div>
+            
+            <div className="flex bg-white/5 p-1 rounded-xl border border-white/10">
+              <button 
+                onClick={() => setOverlayIncognito(false)}
+                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${!overlayIncognito ? 'bg-white/10 text-white shadow-sm' : 'text-white/40 hover:text-white/60'}`}
+              >
+                STANDART
+              </button>
+              <button 
+                onClick={() => setOverlayIncognito(true)}
+                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${overlayIncognito ? 'bg-white/10 text-white shadow-sm' : 'text-white/40 hover:text-white/60'}`}
+              >
+                ANONİM
+              </button>
+            </div>
           </div>
-          <div className="flex-1 overflow-auto px-3 pb-6">
+
+          {/* Tab Grid */}
+          <div className="flex-1 overflow-y-auto px-4 pb-12 scroll-touch">
             {(() => {
               const list = overlayIncognito ? tabsIncog : tabsNormal;
               const q = mobileTabSearch.trim().toLowerCase();
               const filtered = q ? list.filter(t => (t.title || '').toLowerCase().includes(q) || (t.url || '').toLowerCase().includes(q)) : list;
-              if (!filtered.length) return (<div className="text-center text-white/60 mt-10">Heç bir tab yoxdur</div>);
+              
+              if (!filtered.length) {
+                return (
+                  <div className="flex flex-col items-center justify-center py-20 text-center opacity-40">
+                    <div className="text-4xl mb-4">{overlayIncognito ? '🕶️' : '📑'}</div>
+                    <p className="text-sm">Heç bir tab tapılmadı</p>
+                  </div>
+                );
+              }
+
               return (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-4">
                   {filtered.map(t => {
                     const active = (overlayIncognito ? activeTabIdIncog : activeTabIdNormal) === t.id;
+                    const host = t.url ? getHost(t.url) : '';
+                    const favicon = t.url ? `https://www.google.com/s2/favicons?domain=${host}&sz=64` : null;
+                    
                     return (
-                      <div key={t.id} className={`group relative rounded-2xl border overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,.25)] transition-transform duration-200 ease-out active:scale-95 ${active ? 'border-accent/60 bg-white/10' : 'border-white/15 bg-white/5'}`}
-                        onClick={() => { switchToTab(t.id); setShowTabSwitcher(false); }}>
-                        <div className={`relative w-full pt-[66%] bg-black/40`}>
-                          <div className={`absolute inset-0 flex items-center justify-center text-xl font-semibold text-white/70`}>
-                            {t.url ? new URL(t.url).hostname.replace(/^www\./, '').slice(0, 2).toUpperCase() : (overlayIncognito ? '🕶️' : 'N')}
+                      <div 
+                        key={t.id} 
+                        className={`group relative flex flex-col rounded-2xl border overflow-hidden transition-all duration-300 active:scale-95 ${active ? 'border-accent ring-2 ring-accent/20 bg-accent/5' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
+                        onClick={() => { switchToTab(t.id); setShowTabSwitcher(false); }}
+                      >
+                        {/* Preview Area */}
+                        <div className="aspect-[4/5] bg-black/40 flex flex-col items-center justify-center p-4 relative">
+                          {favicon ? (
+                            <img src={favicon} alt="" className="w-12 h-12 rounded-xl mb-3 shadow-lg" />
+                          ) : (
+                            <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center text-2xl mb-3">
+                              {overlayIncognito ? '🕶️' : 'N'}
+                            </div>
+                          )}
+                          <div className="text-center px-2">
+                            <div className="text-xs font-bold text-white/90 line-clamp-1">{t.title || 'Yeni Tab'}</div>
+                            <div className="text-[10px] text-white/40 truncate mt-0.5">{host || 'Lobby'}</div>
                           </div>
-                          <button onClick={(e) => { e.stopPropagation(); closeTabById(t.id); }} className={`absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center opacity-90 hover:opacity-100 bg-black/60 text-white/90 border border-white/20`}>
+                          
+                          {/* Close Button */}
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); closeTabById(t.id); }}
+                            className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/60 backdrop-blur-md text-white border border-white/20 flex items-center justify-center active:scale-75 transition-transform"
+                          >
                             <CloseIcon className="w-4 h-4" />
                           </button>
-                        </div>
-                        <div className="p-2">
-                          <div className={`text-sm font-medium truncate text-white`}>{t.title || 'Yeni Tab'}</div>
-                          <div className={`text-xs truncate text-white/60`}>{t.url || 'Lobby'}</div>
                         </div>
                       </div>
                     );
@@ -1945,6 +2044,22 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 </div>
               );
             })()}
+          </div>
+          
+          {/* Bottom Bar */}
+          <div className="px-6 py-4 border-t border-white/5 bg-white/2 backdrop-blur-xl flex items-center justify-between">
+            <button 
+              onClick={() => { clearAll(); setShowTabSwitcher(false); }}
+              className="text-xs font-bold text-red-400 hover:text-red-300 transition-colors"
+            >
+              HAMISINI BAĞLA
+            </button>
+            <button 
+              onClick={() => setShowTabSwitcher(false)}
+              className="px-6 py-2 bg-white/10 hover:bg-white/15 rounded-xl text-sm font-bold border border-white/10 transition-colors"
+            >
+              HAZIRDIR
+            </button>
           </div>
         </div>
       )}
@@ -2010,8 +2125,8 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
         </div>
       ) : (
         <div>
-          {/* Sticky mini nav on results (mobile only): only logo + back/forward */}
-          {isMobile && (
+          {/* Sticky mini nav on results (mobile only): only logo + back/forward - hidden when global header is shown */}
+          {isMobile && !showGlobalHeader && (
             <div className="sticky top-0 z-20 bg-bg-main/95 backdrop-blur border-b border-white/10 -mx-4 md:-mx-6 px-4 md:px-6 py-2">
               <div className="w-full max-w-5xl mx-auto flex items-center gap-2">
                 {/* Small clickable logo: Incognito results -> go incognito home; otherwise -> go lobby */}
@@ -2058,8 +2173,8 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
               </div>
             </div>
           )}
-          {/* Re-search bar (mobile only): placed under nav and above categories */}
-          {isMobile && (
+          {/* Re-search bar (mobile only): placed under nav and above categories - hidden when global header is shown */}
+          {isMobile && !showGlobalHeader && (
             <div className="-mx-4 md:-mx-6 px-4 md:px-6 py-2">
               <div className="w-full max-w-5xl mx-auto">
                 <HeroSearchBar
@@ -2110,86 +2225,90 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
           <div className="grid gap-4 grid-cols-1">
             {/* Results list */}
             <div className="pr-2 pb-24">
-              {/* Tabs: Web / Images / Videos / News / Shopping */}
-              <div className="flex gap-2 mb-3 sticky top-0 bg-bg-main/95 backdrop-blur z-10 p-2 rounded-lg border border-white/10 overflow-x-auto no-scrollbar scroll-touch whitespace-nowrap">
+              {/* Categories Bar */}
+              <div className="flex gap-2 mb-6 sticky top-[env(safe-area-inset-top)] bg-bg-jet/80 backdrop-blur-2xl z-20 p-2 rounded-2xl border border-white/5 shadow-2xl overflow-x-auto no-scrollbar scroll-touch whitespace-nowrap mx-auto w-full max-w-2xl">
                 {(
                   [
-                    { id: 'web', label: `Veb ${results.length ? `(${results.length})` : ''}` },
-                    { id: 'images', label: `Şəkillər ${imageResults.length ? `(${imageResults.length})` : ''}` },
-                    { id: 'videos', label: `Videolar ${videoUrls.length ? `(${videoUrls.length})` : ''}` },
-                    { id: 'news', label: `Xəbərlər ${newsItems.length ? `(${newsItems.length})` : ''}` },
-                    { id: 'shopping', label: `Shopping ${products.length ? `(${products.length})` : ''}` },
+                    { id: 'web', label: `Veb`, icon: '🌐' },
+                    { id: 'images', label: `Şəkillər`, icon: '🖼️' },
+                    { id: 'videos', label: `Videolar`, icon: '🎥' },
+                    { id: 'news', label: `Xəbərlər`, icon: '📰' },
+                    { id: 'shopping', label: `Alış-veriş`, icon: '🛍️' },
                   ] as const
                 ).map(t => (
                   <button key={t.id}
                     onClick={() => setActiveTab(t.id as any)}
-                    className={`shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === t.id ? 'bg-accent/20 text-white ring-1 ring-accent/50' : 'text-white/70 hover:text-white hover:bg-white/10'
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all duration-300 ${activeTab === t.id ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'
                       }`}>
-                    {t.label}
+                    <span>{t.icon}</span>
+                    <span>{t.label}</span>
                   </button>
                 ))}
               </div>
-              {/* AI Analysis compact panel (modern, animated) */}
-              <div className="mb-3 p-3 rounded-2xl border border-white/10 bg-gradient-to-br from-white/6 via-white/4 to-white/6 backdrop-blur-xl shadow-[0_10px_30px_rgba(0,0,0,.25)] transition-all">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Logo isLarge={false} />
-                    <span className="text-sm font-semibold text-white/90">AI Analizi</span>
+
+              {/* AI Analysis Panel */}
+              <div className="mb-8 p-5 rounded-[28px] bg-gradient-to-br from-white/10 to-white/5 backdrop-blur-3xl border border-white/10 shadow-2xl ring-1 ring-white/5 overflow-hidden">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-accent flex items-center justify-center text-white shadow-lg shadow-accent/20">
+                      <span className="text-xl">✨</span>
+                    </div>
+                    <div>
+                      <h3 className="text-[15px] font-bold text-white leading-tight">Smart Analiz</h3>
+                      <p className="text-[10px] text-accent font-bold uppercase tracking-widest">PRO AKTİV</p>
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-2">
                     <button
                       onClick={handleAiAnalyze}
                       disabled={aiLoading || !query.trim()}
-                      className={`px-3 py-1.5 rounded-lg text-sm ${aiLoading || !query.trim() ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-accent/60 hover:bg-accent/70 text-white shadow-md shadow-accent/20'}`}
+                      className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${aiLoading || !query.trim() ? 'bg-white/5 text-white/20' : 'bg-white/10 hover:bg-white/15 text-white border border-white/10'}`}
                     >
-                      {aiLoading ? 'Analiz edilir...' : 'AI Analiz Et'}
+                      {aiLoading ? '...' : 'ANALİZ'}
                     </button>
                     <button
                       onClick={() => setAiExpanded(v => !v)}
-                      className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/15 text-white/80 text-xs"
-                      title={aiExpanded ? 'Yığ' : 'Aç'}
+                      className={`w-10 h-10 flex items-center justify-center rounded-xl border transition-all ${aiExpanded ? 'bg-accent border-accent text-white' : 'bg-white/5 border-white/10 text-white/60'}`}
                     >
-                      {aiExpanded ? 'Yığ' : 'Aç'}
+                      {aiExpanded ? '−' : '+'}
                     </button>
-                    {/* N avatar */}
-
-                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent/40 to-accent/10 border border-accent/40 text-[11px] font-semibold flex items-center justify-center text-white/90">{overlayIncognito ? '🕶️' : 'N'}</div>
                   </div>
                 </div>
-                <div className={`grid transition-all duration-300 ${aiExpanded ? 'grid-rows-[1fr] mt-3' : 'grid-rows-[0fr]'} overflow-hidden`}>
-                  <div className="min-h-0 space-y-3">
-                    <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap">
-                      <input
-                        type="text"
-                        value={aiInput}
-                        onChange={(e) => setAiInput(e.target.value)}
-                        placeholder="Nəyi analiz edim? (default: cari axtarış)"
-                        className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-black/40 text-white placeholder-white/60 border border-white/15 focus:outline-none focus:ring-2 focus:ring-accent/60"
-                      />
-                      <button
-                        onClick={handleAiSend}
-                        disabled={aiLoading || (!aiInput.trim() && pendingImages.length === 0)}
-                        className={`px-3 py-2 rounded-lg text-sm ${aiLoading || (!aiInput.trim() && pendingImages.length === 0) ? 'bg-white/5 text-white/40 cursor-not-allowed' : 'bg-accent/60 hover:bg-accent/70 text-white shadow-md shadow-accent/20'}`}
-                      >
-                        Göndər
-                      </button>
-                      {/* Inline camera and file buttons instead of dropdown */}
+                <div className={`grid transition-all duration-400 ease-[cubic-bezier(0.23,1,0.32,1)] ${aiExpanded ? 'grid-rows-[1fr] mt-4 opacity-100' : 'grid-rows-[0fr] opacity-0'} overflow-hidden`}>
+                  <div className="min-h-0 space-y-4">
+                    <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                      <div className="flex-1 min-w-0 relative flex items-center bg-black/40 border border-white/10 rounded-xl focus-within:ring-1 focus-within:ring-accent/50 focus-within:border-accent/40 transition-all">
+                        <input
+                          type="text"
+                          value={aiInput}
+                          onChange={(e) => setAiInput(e.target.value)}
+                          placeholder="Nəyi analiz edim? (məs: xülasə çıxar, fərqləri tap...)"
+                          className="w-full bg-transparent px-4 py-3 text-[14px] text-white placeholder-white/40 focus:outline-none"
+                        />
+                      </div>
                       <button
                         onClick={() => aiFileInputRef.current?.click()}
-                        className="p-2 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 shrink-0"
+                        className="w-11 h-11 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/15 border border-white/10 text-white/70 hover:text-white transition-colors shrink-0"
                         title="Kamera"
                         type="button"
                       >
-                        <CameraIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                        <CameraIcon className="w-5 h-5" />
                       </button>
                       <button
                         onClick={() => aiGalleryInputRef.current?.click()}
-                        className="p-2 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-white/80 shrink-0"
+                        className="w-11 h-11 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/15 border border-white/10 text-white/70 hover:text-white transition-colors shrink-0"
                         title="Fayl"
                         type="button"
                       >
-                        📁
+                        <span className="text-lg leading-none">📁</span>
+                      </button>
+                      <button
+                        onClick={handleAiSend}
+                        disabled={aiLoading || (!aiInput.trim() && pendingImages.length === 0)}
+                        className={`px-4 h-11 rounded-xl text-[14px] font-semibold transition-all duration-300 ${aiLoading || (!aiInput.trim() && pendingImages.length === 0) ? 'bg-white/5 text-white/30 cursor-not-allowed border border-white/10' : 'bg-accent/60 hover:bg-accent/70 text-white shadow-[0_4px_12px_rgba(var(--accent),0.3)]'}`}
+                      >
+                        Göndər
                       </button>
                     </div>
                     {pendingImages.length > 0 && (
@@ -2217,17 +2336,24 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                       <div className="flex items-start gap-2">
                         <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent/40 to-accent/10 border border-accent/40 flex items-center justify-center text-[11px] font-semibold text-white/90 flex-shrink-0">N</div>
                         <div className="flex-1 p-3 rounded-2xl bg-white/8 border border-white/10 text-sm text-white/90 whitespace-pre-wrap">
-                          {/* Show analyzed image thumbnails */}
+                           {/* Show analyzed image thumbnails */}
                           {aiUsedImages && aiUsedImages.length > 0 && (
                             <div className="mb-2 flex items-center gap-2 flex-wrap">
-                              {aiUsedImages.slice(0, 4).map((src, i) => (
+                              {aiUsedImages.slice(0, 8).map((src, i) => (
                                 <button key={i} onClick={() => setAiImageModalUrl(src)} className="focus:outline-none">
-                                  <img src={src} alt="analiz şəkli" className="w-12 h-12 rounded-md border border-white/20 object-cover hover:opacity-90" />
+                                  <img src={src} alt="analiz şəkli" className="w-14 h-14 rounded-md border border-white/20 object-cover hover:opacity-90 transition-opacity" />
                                 </button>
                               ))}
-                              {aiUsedImages.length > 4 && (
-                                <span className="text-xs text-white/70">+{aiUsedImages.length - 4}</span>
-                              )}
+                            </div>
+                          )}
+                          {/* Show found videos */}
+                          {aiUsedVideos && aiUsedVideos.length > 0 && (
+                            <div className="mb-2 space-y-2">
+                              {aiUsedVideos.slice(0, 3).map((v, i) => (
+                                <div key={i} className="relative rounded-xl overflow-hidden border border-white/10 aspect-video bg-black/40">
+                                  <iframe src={toEmbedUrl(v)} className="w-full h-full" allowFullScreen />
+                                </div>
+                              ))}
                             </div>
                           )}
                           {/* Typing indicator while loading or animating */}
@@ -2275,8 +2401,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                     try { const u = new URL(item.link); domain = u.hostname; isHttp = u.protocol === 'http:'; } catch { }
                     const isSuspicious = isHttp;
                     return (
-                      <li key={i} className={`group relative p-4 bg-white/5 rounded-xl border ${isSuspicious ? 'border-red-500/40' : 'border-white/10'
-                        } hover:bg-white/10 hover:border-white/20 transition-all shadow-lg hover:shadow-xl`}>
+                      <li key={i} className="group relative py-4 border-b border-white/5 last:border-0 hover:bg-white/[0.02] transition-colors rounded-xl px-2">
                         <button
                           className="text-left w-full"
                           onClick={(e) => {
@@ -2304,24 +2429,24 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                           }}
                           title={item.title}
                         >
-                          <div className="flex gap-3">
+                          <div className="flex gap-4">
                             {thumbnail && (
                               <img
                                 src={thumbnail}
                                 alt=""
-                                className={`w-20 h-20 object-cover rounded-lg border border-white/10 flex-shrink-0 ${(safeSearchMode === 'blur' && !unblurredItems.has(item.link) && (isLikelyExplicit(query) || isLikelyExplicit(item.link + (thumbnail || ''), item.title, item.snippet))) ? 'blur-2xl' : ''}`}
+                                className={`w-20 h-20 object-cover rounded-xl flex-shrink-0 bg-white/5 ${(safeSearchMode === 'blur' && !unblurredItems.has(item.link) && (isLikelyExplicit(query) || isLikelyExplicit(item.link + (thumbnail || ''), item.title, item.snippet))) ? 'blur-2xl' : ''}`}
                               />
                             )}
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <img src={favicon} alt="" className="w-4 h-4" />
-                                <span className="text-xs text-green-400 truncate">{domain}</span>
+                              <div className="flex items-center gap-2 mb-1.5 opacity-80">
+                                <img src={favicon} alt="" className="w-3.5 h-3.5 rounded-sm" />
+                                <span className="text-[13px] text-white/60 truncate">{domain}</span>
                                 {isSuspicious && (
-                                  <span className="text-xs px-2 py-0.5 bg-red-500/20 text-red-300 rounded-full border border-red-500/40">🔓 HTTPS yoxdur</span>
+                                  <span className="text-[10px] px-1.5 py-0.5 bg-red-500/10 text-red-400 rounded">HTTP</span>
                                 )}
                               </div>
-                              <div className="text-lg font-semibold text-blue-400 group-hover:underline line-clamp-2">{item.title}</div>
-                              <p className="text-sm text-text-sub mt-1 line-clamp-2">{item.snippet}</p>
+                              <div className="text-base font-medium text-blue-300 group-hover:text-blue-200 group-hover:underline line-clamp-2">{item.title}</div>
+                              <p className="text-[13px] text-white/50 mt-1.5 line-clamp-2 leading-relaxed">{item.snippet}</p>
                             </div>
                           </div>
                         </button>
@@ -2487,35 +2612,35 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 </div>
               </div>
             )}
-            <div className={`flex items-center gap-2 px-2 py-1.5 md:px-3 md:py-2 backdrop-blur-2xl rounded-2xl mx-2 mb-2 border shadow-[0_10px_30px_rgba(0,0,0,.25)] ring-1 ${isLightOverlay ? 'bg-black/10 border-black/15 ring-black/20' : 'bg-white/10 border-white/15 ring-white/20'}`} style={{ display: (overlayChromeHidden || isMobile) ? "none" : undefined }}>
+            <div className={`flex items-center gap-3 px-3 py-2 max-w-5xl mx-auto mt-4 mb-2 backdrop-blur-3xl rounded-[24px] border shadow-[0_20px_60px_-10px_rgba(0,0,0,0.6)] ring-1 transition-all ${isLightOverlay ? 'bg-white/85 border-black/10 ring-black/5' : 'bg-[#0f0f13]/85 border-white/10 ring-white/5'}`} style={{ display: (overlayChromeHidden || isMobile) ? "none" : undefined }}>
               {/* Left: Hamburger menu for overlay (incognito only) */}
               {false && overlayIncognito && (
                 <div className="relative">
-                  <button onClick={() => setOverlayMenuOpen(v => !v)} className={`p-2 rounded-lg ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'}`} aria-label="Menyu" title="Menyu">
+                  <button onClick={() => setOverlayMenuOpen(v => !v)} className={`p-2 rounded-lg ${isLightOverlay ? 'bg-black/5 text-black/80 hover:bg-black/10' : 'bg-white/5 text-white/80 hover:bg-white/10'}`} aria-label="Menyu" title="Menyu">
                     <MenuIcon className="w-4 h-4" />
                   </button>
                   {overlayMenuOpen && (
-                    <div className={`absolute left-0 top-full mt-2 backdrop-blur-md rounded-2xl shadow-2xl py-2 min-w-[240px] z-[70] overflow-hidden ${isLightOverlay ? 'bg-black/5 border border-black/20' : 'bg-white/10 border border-white/20'}`}>
-                      <div className={`absolute left-4 -top-1 w-3 h-3 rotate-45 ${isLightOverlay ? 'bg-black/5 border-l border-t border-black/20' : 'bg-white/10 border-l border-t border-white/20'}`}></div>
-                      <button onClick={() => { setOverlayIncognito(false); closeOverlay(); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/10' : 'text-white/90 hover:bg-white/15'}`}>
+                    <div className={`absolute left-0 top-full mt-2 backdrop-blur-md rounded-2xl shadow-2xl py-2 min-w-[240px] z-[70] overflow-hidden ${isLightOverlay ? 'bg-white/90 border border-black/10' : 'bg-[#16161a]/95 border border-white/10'}`}>
+                      <div className={`absolute left-4 -top-1 w-3 h-3 rotate-45 ${isLightOverlay ? 'bg-white border-l border-t border-black/10' : 'bg-[#16161a] border-l border-t border-white/10'}`}></div>
+                      <button onClick={() => { setOverlayIncognito(false); closeOverlay(); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/5' : 'text-white/90 hover:bg-white/5'}`}>
                         <span>⬅️</span>
                         <span>Brauzerə Geri Qayıt</span>
                       </button>
-                      <button onClick={() => { dispatchNav('profile'); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/10' : 'text-white/90 hover:bg-white/15'}`}>
+                      <button onClick={() => { dispatchNav('profile'); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/5' : 'text-white/90 hover:bg-white/5'}`}>
                         <span>👤</span>
                         <span>Profil</span>
                       </button>
-                      <button onClick={() => { dispatchNav('safe-search'); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/10' : 'text-white/90 hover:bg-white/15'}`}>
+                      <button onClick={() => { dispatchNav('safe-search'); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/5' : 'text-white/90 hover:bg-white/5'}`}>
                         <span>🛡️</span>
                         <span>SafeSearch</span>
                       </button>
-                      <button onClick={() => { dispatchNav('settings'); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/10' : 'text-white/90 hover:bg-white/15'}`}>
+                      <button onClick={() => { dispatchNav('settings'); setOverlayMenuOpen(false); }} className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 ${isLightOverlay ? 'text-black/90 hover:bg-black/5' : 'text-white/90 hover:bg-white/5'}`}>
                         <span>⚙️</span>
                         <span>Ayarlar</span>
                       </button>
-                      <div className={`my-1 h-px ${isLightOverlay ? 'bg-black/10' : 'bg-white/10'}`} />
+                      <div className={`my-1 h-px ${isLightOverlay ? 'bg-black/5' : 'bg-white/5'}`} />
                       {/* Theme selector for incognito overlay */}
-                      <div className={`px-4 py-2 text-xs ${isLightOverlay ? 'text-black/70' : 'text-white/70'}`}>Görünüş</div>
+                      <div className={`px-4 py-2 text-xs ${isLightOverlay ? 'text-black/50' : 'text-white/50'}`}>Görünüş</div>
                       <div className="px-3 pb-3 flex items-center gap-2">
                         {([
                           { id: 'light', label: 'Ağ rejim' },
@@ -2524,7 +2649,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                         ] as const).map(opt => (
                           <button key={opt.id}
                             onClick={() => setOverlayTheme(opt.id as any)}
-                            className={`px-3 py-1.5 rounded-full text-xs border ${isLightOverlay ? (overlayTheme === opt.id ? 'bg-black/20 text-black border-black/40' : 'bg-black/5 text-black/80 hover:bg-black/10 border-black/20') : (overlayTheme === opt.id ? 'bg-white/20 text-white border-white/40' : 'bg-white/5 text-white/80 hover:bg-white/10 border-white/20')}`}
+                            className={`px-3 py-1.5 rounded-full text-xs border transition-colors ${isLightOverlay ? (overlayTheme === opt.id ? 'bg-black/10 text-black border-black/20' : 'bg-transparent text-black/70 hover:bg-black/5 border-transparent') : (overlayTheme === opt.id ? 'bg-white/10 text-white border-white/20' : 'bg-transparent text-white/70 hover:bg-white/5 border-transparent')}`}
                           >{opt.label}</button>
                         ))}
                       </div>
@@ -2533,32 +2658,32 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                 </div>
               )}
               {/* Nav */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 <div className={`flex items-center gap-2 pr-3 mr-1 border-r ${isLightOverlay ? 'border-black/10' : 'border-white/10'}`}>
                   <Logo className={`${isLightOverlay ? 'text-black' : 'text-white'} text-base md:text-xl`} />
                   <div className="leading-none">
-                    <div className={`text-[10px] md:text-[11px] -mt-[1px] ${isLightOverlay ? 'text-black/70' : 'text-white/70'}`}>NovEra Brauzer</div>
+                    <div className={`text-[10px] md:text-[11px] font-medium -mt-[1px] ${isLightOverlay ? 'text-black/60' : 'text-white/60'}`}>NovEra Brauzer</div>
                   </div>
                   {overlayIncognito && (
-                    <div className="ml-2 w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-white/90">🕶️</div>
+                    <div className="ml-2 w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-white/90 shadow-sm border border-white/5">🕶️</div>
                   )}
                 </div>
-                <button onClick={goBack} disabled={overlayIndex <= 0} title="Geri" className={`p-2 rounded-lg ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'} ${overlayIndex <= 0 ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                <button onClick={goBack} disabled={overlayIndex <= 0} title="Geri" className={`w-8 h-8 flex items-center justify-center rounded-full transition-colors ${isLightOverlay ? 'text-black/70 hover:bg-black/5 hover:text-black' : 'text-white/70 hover:bg-white/5 hover:text-white'} ${overlayIndex <= 0 ? 'opacity-30 cursor-not-allowed' : ''}`}>
                   <ArrowLeftIcon className="w-4 h-4" />
                 </button>
-                <button onClick={goForward} disabled={overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1} title="İrəli" className={`p-2 rounded-lg ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'} ${(overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                <button onClick={goForward} disabled={overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1} title="İrəli" className={`w-8 h-8 flex items-center justify-center rounded-full transition-colors ${isLightOverlay ? 'text-black/70 hover:bg-black/5 hover:text-black' : 'text-white/70 hover:bg-white/5 hover:text-white'} ${(overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) ? 'opacity-30 cursor-not-allowed' : ''}`}>
                   <ArrowRightIcon className="w-4 h-4" />
                 </button>
-                <button onClick={reloadOverlay} title="Yenilə" className={`p-2 rounded-lg ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'}`}>
+                <button onClick={reloadOverlay} title="Yenilə" className={`w-8 h-8 flex items-center justify-center rounded-full transition-colors ${isLightOverlay ? 'text-black/70 hover:bg-black/5 hover:text-black' : 'text-white/70 hover:bg-white/5 hover:text-white'}`}>
                   <RefreshIcon className="w-4 h-4" />
                 </button>
               </div>
               {/* URL + Search (always visible on overlay) */}
               <div className="flex items-center gap-2 min-w-0 flex-1">
                 {overlayLoading ? (
-                  <div className={`relative w-7 h-7 rounded-full flex items-center justify-center font-extrabold ${isLightOverlay ? 'bg-black/10 border border-black/20' : 'bg-white/10 border border-white/20'}`}>
-                    <div className="absolute inset-0 rounded-full border-2 border-white/25 border-t-white/80 animate-spin"></div>
-                    <span className="text-[14px] bg-gradient-to-r from-blue-300 via-white to-white text-transparent bg-clip-text">N</span>
+                  <div className={`relative w-8 h-8 rounded-full flex items-center justify-center font-bold ${isLightOverlay ? 'bg-black/5 border border-black/10' : 'bg-white/5 border border-white/10'}`}>
+                    <div className={`absolute inset-0 rounded-full border-2 border-transparent animate-spin ${isLightOverlay ? 'border-t-black/60' : 'border-t-white/80'}`}></div>
+                    <span className="text-[14px] bg-gradient-to-r from-blue-400 to-blue-600 text-transparent bg-clip-text">N</span>
                   </div>
                 ) : overlayUrl ? (
                   <>
@@ -2566,56 +2691,63 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
                     <button
                       onClick={() => { try { navigator.clipboard.writeText(overlayUrl!); } catch { } }}
                       title="URL-i kopyala"
-                      className={`hidden md:inline-flex items-center px-2 py-1 rounded-md text-[11px] border ${isLightOverlay ? 'bg-white/60 text-black/80 border-black/20 hover:bg-white/75' : 'bg-black/40 text-white/80 border-white/20 hover:bg-black/55'}`}
+                      className={`hidden md:inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${isLightOverlay ? 'bg-black/5 text-black/80 border-black/10 hover:bg-black/10' : 'bg-white/5 text-white/80 border-white/10 hover:bg-white/10'}`}
                     >{(() => { try { return new URL(overlayUrl!).hostname.replace(/^www\./, ''); } catch { return 'link'; } })()}</button>
                   </>
                 ) : (!isMobile ? (
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center font-extrabold ${isLightOverlay ? 'bg-black/10' : 'bg-white/10'}`}>
-                    <span className="text-[14px] bg-gradient-to-r from-blue-300 via-white to-white text-transparent bg-clip-text">N</span>
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${isLightOverlay ? 'bg-black/5' : 'bg-white/5'}`}>
+                    <span className="text-[14px] bg-gradient-to-r from-blue-400 to-blue-600 text-transparent bg-clip-text">N</span>
                   </div>
                 ) : null)}
                 {!overlayUrl && (
-                  <input
-                    type="text"
-                    value={overlaySearch}
-                    onChange={(e) => setOverlaySearch(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const v = (overlaySearch || '').trim();
-                        if (!v) return;
-                        if (isProbablyUrl(v)) { navigateOverlay(normalizeUrl(v)); setOverlaySearch(''); return; }
-                        closeOverlay(); doSearch(1, v);
-                      }
-                    }}
-                    placeholder="Axtar..."
-                    className={`flex-1 min-w-0 text-lg md:text-xl px-5 py-3 rounded-full focus:outline-none focus:ring-2 focus:ring-accent/70 border shadow-[inset_0_0_0_1px_rgba(255,255,255,.06)] ${isLightOverlay ? 'bg-white/80 text-black placeholder-black/60 border-black/20' : 'bg-black/45 text-white placeholder-white/70 border-white/20'} backdrop-blur-xl`}
-                  />
+                  <div className={`flex-1 flex items-center gap-2 px-4 py-2 rounded-full border ring-1 transition-all focus-within:ring-accent/50 focus-within:border-accent/40 ${isLightOverlay ? 'bg-black/5 border-black/10 ring-black/5' : 'bg-black/40 border-white/10 ring-black/20 shadow-inner'}`}>
+                    {overlayIncognito ? (
+                      <span className="text-white/50 text-sm">🕶️</span>
+                    ) : (
+                      <SearchIcon className={`w-4 h-4 ${isLightOverlay ? 'text-black/40' : 'text-white/50'}`} />
+                    )}
+                    <input
+                      type="text"
+                      value={overlaySearch}
+                      onChange={(e) => setOverlaySearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const v = (overlaySearch || '').trim();
+                          if (!v) return;
+                          if (isProbablyUrl(v)) { navigateOverlay(normalizeUrl(v)); setOverlaySearch(''); return; }
+                          closeOverlay(); doSearch(1, v);
+                        }
+                      }}
+                      placeholder="Axtarış və ya URL daxil edin..."
+                      className={`flex-1 min-w-0 bg-transparent outline-none text-[15px] font-medium ${isLightOverlay ? 'text-black/90 placeholder-black/40' : 'text-white/90 placeholder-white/40'}`}
+                    />
+                  </div>
                 )}
               </div>
               {/* Actions (simplified in Incognito) */}
-              <div className="flex items-center gap-2">
-                <button onClick={openHeaderNewTabFromOverlay} className={`p-2 rounded-lg border ${isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black/80 border-black/20' : 'bg-white/10 hover:bg-white/15 text-white/80 border-white/20'}`} title="Yeni tab">
+              <div className="flex items-center gap-1.5">
+                <button onClick={openHeaderNewTabFromOverlay} className={`w-8 h-8 flex items-center justify-center rounded-full transition-colors ${isLightOverlay ? 'hover:bg-black/5 text-black/70 hover:text-black' : 'hover:bg-white/5 text-white/70 hover:text-white'}`} title="Yeni tab">
                   <PlusIcon className="w-4 h-4" />
                 </button>
-                <button onClick={toggleFullscreen} className={`p-2 rounded-lg border ${isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black/80 border-black/20' : 'bg-white/10 hover:bg-white/15 text-white/80 border-white/20'}`} title={isFullscreenActive ? 'Tam ekrandan çıx' : 'Tam ekran'}>
+                <button onClick={toggleFullscreen} className={`w-8 h-8 flex items-center justify-center rounded-full transition-colors ${isLightOverlay ? 'hover:bg-black/5 text-black/70 hover:text-black' : 'hover:bg-white/5 text-white/70 hover:text-white'}`} title={isFullscreenActive ? 'Tam ekrandan çıx' : 'Tam ekran'}>
                   {isFullscreenActive ? <MinimizeIcon className="w-4 h-4" /> : <MaximizeIcon className="w-4 h-4" />}
                 </button>
                 {overlayUrl && (
-                  <>
+                  <div className={`hidden sm:flex items-center p-0.5 rounded-lg border ${isLightOverlay ? 'bg-black/5 border-black/10' : 'bg-white/5 border-white/10'}`}>
                     <button
                       onClick={() => setOverlayOpenMode('original')}
-                      className={`inline-flex text-xs px-3 py-1 rounded-lg transition-colors border ${overlayOpenMode === 'original' ? 'bg-accent/40 text-white border-accent/40' : (isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black/80 border-black/20' : 'bg-white/10 hover:bg-white/15 text-white/80 border-white/20')}`}
-                    >{overlayOpenMode === 'original' ? '✓ iframe' : 'iframe'}</button>
+                      className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${overlayOpenMode === 'original' ? 'bg-white text-black shadow-sm' : (isLightOverlay ? 'text-black/60 hover:text-black' : 'text-white/60 hover:text-white')}`}
+                    >iframe</button>
                     <button
                       onClick={() => setOverlayOpenMode('proxy')}
-                      className={`inline-flex text-xs px-3 py-1 rounded-lg transition-colors border ${overlayOpenMode === 'proxy' ? 'bg-accent/40 text-white border-accent/40' : (isLightOverlay ? 'bg-black/10 hover:bg-black/15 text-black/80 border-black/20' : 'bg-white/10 hover:bg-white/15 text-white/80 border-white/20')}`}
-                    >{overlayOpenMode === 'proxy' ? '✓ original' : 'original'}</button>
-                  </>
+                      className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${overlayOpenMode === 'proxy' ? 'bg-white text-black shadow-sm' : (isLightOverlay ? 'text-black/60 hover:text-black' : 'text-white/60 hover:text-white')}`}
+                    >proxy</button>
+                  </div>
                 )}
                 {overlayUrl && (
-                  <a href={overlayUrl} target="_blank" rel="noopener noreferrer" className={`hidden sm:inline-flex text-xs px-3 py-1 rounded-lg transition-colors ml-auto ${isLightOverlay ? 'bg-black/10 text-black hover:bg-black/15' : 'bg-accent/30 text-white hover:bg-accent/40'}`}>Yeni pəncərədə aç ↗</a>
+                  <a href={overlayUrl} target="_blank" rel="noopener noreferrer" className={`hidden sm:inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ml-1 ${isLightOverlay ? 'bg-black/5 hover:bg-black/10 text-black/80' : 'bg-accent/20 hover:bg-accent/30 text-white border border-accent/30'}`}>Aç ↗</a>
                 )}
-                <button onClick={closeOverlay} className={`p-1.5 rounded-lg ${isLightOverlay ? 'hover:bg-black/10 text-black/80' : 'hover:bg-white/10 text-white/80'}`} title="Bağla">
+                <button onClick={closeOverlay} className={`w-9 h-9 flex items-center justify-center rounded-full ml-1 transition-colors ${isLightOverlay ? 'bg-black/5 hover:bg-black/10 text-black' : 'bg-white/10 hover:bg-white/20 text-white'}`} title="Bağla">
                   <CloseIcon className="w-5 h-5" />
                 </button>
               </div>
@@ -2644,72 +2776,118 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ onVisualQuery, openOve
             )}
             {/* Mobile overlay controls (modern, 2-row) */}
             {isMobile && (
-              <div className={`relative z-[60] flex flex-col gap-2 px-3 pr-16 py-2 ${isLightOverlay ? 'bg-black/5' : 'bg-white/5'} pointer-events-auto`} style={{ display: overlayChromeHidden ? 'none' : undefined }}>
-                {/* Row 1: brand + nav + tab counter + mode + close */}
-                <div className="flex items-center flex-nowrap gap-1.5 pointer-events-auto w-full">
-                  <Logo className={`${isLightOverlay ? 'text-black' : 'text-white'} text-base`} />
-                  <button onClick={goBack} disabled={overlayIndex <= 0} title="Geri" className={`p-2 rounded-lg shrink-0 ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'} ${overlayIndex <= 0 ? 'opacity-40 cursor-not-allowed' : ''}`}>
-                    <ArrowLeftIcon className="w-4 h-4" />
-                  </button>
-                  <button onClick={goForward} disabled={overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1} title="İrəli" className={`p-2 rounded-lg shrink-0 ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'} ${(overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) ? 'opacity-40 cursor-not-allowed' : ''}`}>
-                    <ArrowRightIcon className="w-4 h-4" />
-                  </button>
-                  <button onClick={reloadOverlay} title="Yenilə" className={`p-2 rounded-lg shrink-0 ${isLightOverlay ? 'bg-black/10 text-black/80 hover:bg-black/15' : 'bg-white/10 text-white/80 hover:bg-white/15'}`}>
-                    <RefreshIcon className="w-4 h-4" />
-                  </button>
-                  {/* Tab counter (opens tab switcher) */}
-                  <button onClick={() => { setOverlayShellOpen(false); setShowTabSwitcher(true); }} className={`w-9 h-9 rounded-lg font-semibold flex items-center justify-center shrink-0 ${isLightOverlay ? 'bg-black/10 text-black hover:bg-black/15 border border-black/20' : 'bg-white/10 text-white hover:bg-white/15 border border-white/20'}`} title="Tablar" aria-label="Tablar">
-                    {Math.max(1, mobileTabCount || 0)}
-                  </button>
-                  {overlayUrl && (
-                    <div className={`ml-1 inline-flex rounded-xl p-0.5 border shrink-0 hidden sm:inline-flex ${isLightOverlay ? 'bg-black/10 border-black/15' : 'bg-white/10 border-white/15'}`}>
-                      <button onClick={() => setOverlayOpenMode('original')} className={`px-2.5 py-1 text-[11px] rounded-lg ${overlayOpenMode === 'original' ? 'bg-accent/40 text-white' : (isLightOverlay ? 'text-black/80 hover:bg-black/10' : 'text-white/80 hover:bg-white/10')}`}>iframe</button>
-                      <button onClick={() => setOverlayOpenMode('proxy')} className={`px-2.5 py-1 text-[11px] rounded-lg ${overlayOpenMode === 'proxy' ? 'bg-accent/40 text-white' : (isLightOverlay ? 'text-black/80 hover:bg-black/10' : 'text-white/80 hover:bg-white/10')}`}>original</button>
-                    </div>
-                  )}
-                </div>
-                {/* Row 2: search input + SafeSearch (Mobile) */}
-                <div className="flex items-center gap-2">
-                  <div className="relative shrink-0">
-                    <button
-                      onClick={() => setSafeSearchDropdownOpen(!safeSearchDropdownOpen)}
-                      className={`w-10 h-10 rounded-full flex items-center justify-center border ${safeSearchMode !== 'off' ? 'bg-accent/20 border-accent/40' : 'bg-white/10 border-white/20'}`}
+              <div 
+                className={`relative z-[60] flex flex-col gap-3 px-4 py-4 ${isLightOverlay ? 'bg-white/80 border-b border-black/5' : 'bg-[#0f0f13]/90 border-b border-white/5'} backdrop-blur-2xl pointer-events-auto shadow-xl`} 
+                style={{ display: overlayChromeHidden ? 'none' : undefined }}
+              >
+                {/* Row 1: Back, Forward, URL/Search, Tabs, Menu */}
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1 bg-white/5 rounded-xl p-1 border border-white/5">
+                    <button 
+                      onClick={goBack} 
+                      disabled={overlayIndex <= 0}
+                      className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${overlayIndex <= 0 ? 'opacity-20' : (isLightOverlay ? 'hover:bg-black/5 text-black' : 'hover:bg-white/10 text-white')}`}
                     >
-                      <span className="text-lg">🛡️</span>
+                      <ArrowLeftIcon className="w-5 h-5" />
                     </button>
-                    {safeSearchDropdownOpen && (
-                      <div className="absolute top-full left-0 mt-2 w-48 bg-black/95 backdrop-blur-2xl border border-white/20 rounded-2xl shadow-2xl z-[100] py-1 overflow-hidden">
-                        {(['filter', 'blur', 'off'] as const).map(m => (
-                          <button
-                            key={m}
-                            onClick={() => {
-                              try { window.dispatchEvent(new CustomEvent('nov-era-safe-search-changed', { detail: m })); } catch { }
-                              setSafeSearchDropdownOpen(false);
-                            }}
-                            className={`w-full text-left px-4 py-3 text-sm ${safeSearchMode === m ? 'bg-accent/20 text-white' : 'text-white/80'}`}
-                          >
-                            {m === 'filter' ? 'Filtr' : m === 'blur' ? 'Bulanıqlıq' : 'Deaktiv'}
-                          </button>
-                        ))}
-                      </div>
+                    <button 
+                      onClick={goForward} 
+                      disabled={overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1}
+                      className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${(overlayIndex < 0 || overlayIndex >= overlayHistory.length - 1) ? 'opacity-20' : (isLightOverlay ? 'hover:bg-black/5 text-black' : 'hover:bg-white/10 text-white')}`}
+                    >
+                      <ArrowRightIcon className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className={`flex-1 flex items-center gap-2 px-4 py-2.5 rounded-2xl border transition-all ${isLightOverlay ? 'bg-black/5 border-black/10 text-black' : 'bg-white/5 border-white/10 text-white'} focus-within:ring-2 focus-within:ring-accent/50`}>
+                    {overlayLoading ? (
+                      <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <SearchIcon className="w-4 h-4 opacity-40" />
+                    )}
+                    <input 
+                      type="text"
+                      value={overlaySearch || (overlayUrl ? getHost(overlayUrl) : '')}
+                      onChange={(e) => setOverlaySearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const v = (overlaySearch || '').trim();
+                          if (!v) return;
+                          if (isProbablyUrl(v)) { navigateOverlay(normalizeUrl(v)); setOverlaySearch(''); return; }
+                          closeOverlay(); doSearch(1, v);
+                        }
+                      }}
+                      placeholder="Axtar və ya URL..."
+                      className="flex-1 bg-transparent text-sm font-medium outline-none placeholder:opacity-40"
+                    />
+                    {overlayUrl && (
+                      <button onClick={reloadOverlay} className="p-1 opacity-40 hover:opacity-100">
+                        <RefreshIcon className="w-4 h-4" />
+                      </button>
                     )}
                   </div>
-                  <input
-                    type="text"
-                    value={overlaySearch}
-                    onChange={(e) => setOverlaySearch(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const v = (overlaySearch || '').trim();
-                        if (!v) return;
-                        if (isProbablyUrl(v)) { navigateOverlay(normalizeUrl(v)); setOverlaySearch(''); return; }
-                        closeOverlay(); doSearch(1, v);
-                      }
-                    }}
-                    placeholder="Axtar..."
-                    className={`flex-1 min-w-0 text-base px-4 py-2.5 rounded-full focus:outline-none focus:ring-2 focus:ring-accent/70 border shadow-[inset_0_0_0_1px_rgba(255,255,255,.06)] ${isLightOverlay ? 'bg-white/80 text-black placeholder-black/60 border-black/20' : 'bg-black/45 text-white placeholder-white/70 border-white/20'} backdrop-blur-xl`}
-                  />
+
+                  <button 
+                    onClick={() => { setOverlayShellOpen(false); setShowTabSwitcher(true); }}
+                    className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold text-sm border shadow-sm transition-all active:scale-90 ${isLightOverlay ? 'bg-white border-black/10 text-black' : 'bg-white/10 border-white/10 text-white'}`}
+                  >
+                    {Math.max(1, mobileTabCount || 0)}
+                  </button>
                 </div>
+
+                {/* Row 2: Secondary actions (SafeSearch, Mode, More) */}
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => setSafeSearchDropdownOpen(!safeSearchDropdownOpen)}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-2 border transition-colors ${safeSearchMode !== 'off' ? 'bg-accent/20 border-accent/30 text-accent' : 'bg-white/5 border-white/10 text-white/60'}`}
+                    >
+                      🛡️ {safeSearchMode === 'off' ? 'SİXİLİ' : safeSearchMode.toUpperCase()}
+                    </button>
+                    
+                    {overlayUrl && (
+                      <button 
+                        onClick={() => setOverlayOpenMode(overlayOpenMode === 'proxy' ? 'original' : 'proxy')}
+                        className={`px-3 py-1.5 rounded-full text-[11px] font-bold border transition-colors ${isLightOverlay ? 'bg-black/5 border-black/10 text-black/60' : 'bg-white/5 border-white/10 text-white/60'}`}
+                      >
+                        {overlayOpenMode.toUpperCase()}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={() => setPageMenuOpen(!pageMenuOpen)}
+                      className={`p-2 rounded-lg ${isLightOverlay ? 'text-black/60' : 'text-white/60'}`}
+                    >
+                      <MenuIcon className="w-5 h-5" />
+                    </button>
+                    <button 
+                      onClick={closeOverlay}
+                      className="w-10 h-10 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center border border-red-500/20 active:scale-90 transition-transform"
+                    >
+                      <CloseIcon className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* SafeSearch Dropdown Mobile */}
+                {safeSearchDropdownOpen && (
+                  <div className={`absolute top-full left-4 mt-2 w-48 rounded-2xl shadow-2xl border p-1 z-[70] animate-in fade-in zoom-in duration-200 ${isLightOverlay ? 'bg-white border-black/10' : 'bg-[#1a1a1f] border-white/10'}`}>
+                    {(['filter', 'blur', 'off'] as const).map(m => (
+                      <button
+                        key={m}
+                        onClick={() => {
+                          try { window.dispatchEvent(new CustomEvent('nov-era-safe-search-changed', { detail: m })); } catch { }
+                          setSafeSearchDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-4 py-3 text-xs font-bold rounded-xl transition-colors ${safeSearchMode === m ? 'bg-accent/20 text-accent' : (isLightOverlay ? 'text-black/70 hover:bg-black/5' : 'text-white/70 hover:bg-white/5')}`}
+                      >
+                        {m === 'filter' ? 'FİLTRLƏ' : m === 'blur' ? 'BULANIQ' : 'DEAKTİV'}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {/* Incognito landing or web iframe */}

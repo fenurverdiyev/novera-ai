@@ -88,7 +88,7 @@ export const NewsScreen: React.FC<NewsScreenProps> = ({
   };
 
   return (
-    <div className="flex-grow overflow-y-auto p-4 md:p-8 bg-bg-jet/90 backdrop-blur-sm">
+    <div className="flex-grow overflow-y-auto p-4 md:p-8 bg-bg-jet/90 backdrop-blur-sm pb-32 md:pb-8">
       <header className="mb-8">
         <h1 className="text-4xl font-bold text-text-main mb-2">Xəbərlər</h1>
         <p className="text-text-sub">Dünyadan və bölgənizdən ən son xəbərlər.</p>

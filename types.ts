@@ -58,7 +58,7 @@ export interface ShoppingProduct {
   imageUrl?: string;
 }
 
-export type AppView = 'search' | 'google-search' | 'browser' | 'news' | 'weather' | 'translate' | 'settings' | 'profile' | 'live' | 'safe-search' | 'incognito';
+export type AppView = 'search' | 'google-search' | 'browser' | 'news' | 'weather' | 'translate' | 'settings' | 'profile' | 'live' | 'safe-search' | 'incognito' | 'memory';
 
 export type SearchMode = 'base' | 'universe' | 'canvas';
 
@@ -72,6 +72,7 @@ export interface AppSettings {
   noveraColor?: string; // custom background color for NovEra theme
   voiceEnabled?: boolean;
   voiceId?: string;
+  language?: 'az' | 'tr' | 'ru' | 'en';
 }
 
 export interface WeatherData {

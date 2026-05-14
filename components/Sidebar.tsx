@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import type { AppView, Message } from '../types';
 import { SearchIcon, NewsIcon, WeatherIcon, TranslateIcon, SettingsIcon, UserIcon, PlusIcon, SparklesIcon, BookmarkIcon, CloseIcon, GlobeIcon } from './Icons';
-
 import { Logo } from './Logo';
+import { getTranslation, Language } from '../utils/translations';
 
 interface SidebarProps {
   activeView: AppView;
@@ -10,21 +10,23 @@ interface SidebarProps {
   themeColor?: string;
   onNewChat?: () => void;
   onOpenSession?: (messages: Message[]) => void;
+  language: Language;
 }
 
 const navItems = [
-  { id: 'google-search', icon: GlobeIcon, label: 'Brauzer' },
-  { id: 'search', icon: SparklesIcon, label: 'Al' },
-  { id: 'news', icon: NewsIcon, label: 'Xəbərlər' },
-  { id: 'weather', icon: WeatherIcon, label: 'Hava' },
-  { id: 'translate', icon: TranslateIcon, label: 'Tərcümə' },
-  { id: 'profile', icon: UserIcon, label: 'Profil' },
-  { id: 'settings', icon: SettingsIcon, label: 'Ayarlar' },
+  { id: 'google-search', icon: GlobeIcon, label: 'browser' },
+  { id: 'search', icon: SparklesIcon, label: 'ai' },
+  { id: 'news', icon: NewsIcon, label: 'news' },
+  { id: 'weather', icon: WeatherIcon, label: 'weather' },
+  { id: 'translate', icon: TranslateIcon, label: 'translate' },
+  { id: 'profile', icon: UserIcon, label: 'profile' },
+  { id: 'settings', icon: SettingsIcon, label: 'settings' },
 ] as const;
 
 type Session = { id: number; title: string; time: number; messages: Message[] };
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, themeColor, onNewChat, onOpenSession }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, themeColor, onNewChat, onOpenSession, language }) => {
+  const t = (key: any) => getTranslation(language, key);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -103,11 +105,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
         <Logo />
         <button
           onClick={() => {
-            if (activeView === 'incognito') {
-              setTimeout(() => { try { window.dispatchEvent(new Event('nov-era-new-tab' as any)); } catch {} }, 0);
-            } else {
-              setActiveView('browser');
-              setTimeout(() => { try { window.dispatchEvent(new Event('nov-era-new-tab' as any)); } catch {} }, 0);
+            if (onNewChat) {
+              onNewChat();
+              setActiveView('search');
             }
           }}
           className="p-2 rounded-lg bg-accent/15 text-accent hover:bg-accent/25 transition-colors ring-1 ring-accent/40 shadow-[0_0_8px_rgba(88,166,255,0.35)]"
@@ -124,15 +124,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
               <button
                 key={item.id}
                 onClick={() => setActiveView(item.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors relative ${
-                  isActive ? 'text-white bg-accent/20 ring-1 ring-accent/50 shadow-[0_0_12px_rgba(88,166,255,0.5)] translate-y-px' : 'text-text-sub hover:text-text-main hover:bg-white/5'
+                className={`w-full flex items-center gap-3 px-3 py-3 rounded-2xl transition-all relative ${
+                  isActive 
+                    ? 'text-white bg-white/10 border border-white/10 shadow-lg shadow-black/20' 
+                    : 'text-slate-400 hover:text-white hover:bg-white/5 border border-transparent'
                 }`}
-                aria-label={item.label}
+                aria-label={t(item.label)}
                 aria-current={isActive ? 'page' : undefined}
-                style={isActive && themeColor ? { boxShadow: `0 0 12px ${themeColor}` } : undefined}
               >
-                <item.icon className="w-5 h-5" />
-                <span className="text-sm font-medium">{item.label}</span>
+                <item.icon className={`w-5 h-5 ${isActive ? 'text-cyan-400' : 'text-slate-500'}`} />
+                <span className="text-sm font-semibold">{t(item.label)}</span>
+                {isActive && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-cyan-400 rounded-r-full" />
+                )}
               </button>
             );
           })}
@@ -141,16 +145,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, the
         {/* History section under nav */}
         <div className="mt-4 pt-3 border-t border-white/10 px-2">
           <div className="flex items-center justify-between px-2">
-            <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-white/60">
-              <BookmarkIcon className="w-4 h-4" />
-              Keçmiş
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.1em] text-slate-500">
+              {t('history')}
             </div>
             <button
               onClick={() => { try { window.dispatchEvent(new Event('nov-era-clear-all' as any)); } catch {} }}
-              className="text-[11px] px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-white/70 border border-white/10"
-              title="Bütün tarixçəni sil"
+              className="text-[10px] px-2 py-1 rounded-lg bg-white/5 hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 border border-white/5 transition-colors"
+              title={t('clearAll')}
             >
-              Hamısını sil
+              {t('clearAll')}
             </button>
           </div>
           <div className="mt-2 space-y-1">

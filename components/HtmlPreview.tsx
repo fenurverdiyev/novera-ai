@@ -11,6 +11,18 @@ export const HtmlPreview: React.FC<HtmlPreviewProps> = ({ html, title = 'Canvas 
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
     const [copied, setCopied] = useState(false);
+    const [displayTitle, setDisplayTitle] = useState(title);
+
+    useEffect(() => {
+        if (html) {
+            const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+            if (titleMatch && titleMatch[1]) {
+                setDisplayTitle(titleMatch[1]);
+            } else {
+                setDisplayTitle(title);
+            }
+        }
+    }, [html, title]);
 
     useEffect(() => {
         if (activeTab === 'preview' && iframeRef.current) {
@@ -41,7 +53,7 @@ export const HtmlPreview: React.FC<HtmlPreviewProps> = ({ html, title = 'Canvas 
         <div className={`rounded-xl overflow-hidden border border-white/10 bg-bg-onyx mt-4 flex flex-col ${isFullscreen ? 'fixed inset-4 z-50 shadow-2xl' : 'relative aspect-video'}`}>
             <div className="flex-shrink-0 bg-black/50 backdrop-blur-sm flex items-center justify-between px-4 border-b border-white/10 z-10 h-11">
                 <div className="flex items-center gap-4">
-                    <span className="text-xs font-semibold text-white/90 truncate max-w-[120px] sm:max-w-none">{title}</span>
+                    <span className="text-xs font-semibold text-white/90 truncate max-w-[120px] sm:max-w-none">{displayTitle}</span>
                     <div className="flex bg-white/5 rounded-lg p-0.5 border border-white/5">
                         <button
                             onClick={() => setActiveTab('preview')}

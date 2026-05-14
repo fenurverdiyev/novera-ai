@@ -99,7 +99,7 @@ export default defineConfig(({ mode }) => {
           const API_KEY = env.GEMINI_TTS_API_KEY || env.VITE_GEMINI_TTS_API_KEY || env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY;
           if (!API_KEY) { res.statusCode = 500; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: 'Gemini API key not configured' })); return; }
 
-          const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent';
+          const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
           const payload = {
             contents: [{ parts: [{ text: t }] }],
             generationConfig: { responseModalities: ['AUDIO'] },
@@ -158,7 +158,9 @@ export default defineConfig(({ mode }) => {
       'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
       'process.env.VITE_ELEVENLABS_API_KEY': JSON.stringify(env.VITE_ELEVENLABS_API_KEY),
-      'process.env.VITE_SERPAPI_KEY': JSON.stringify(env.VITE_SERPAPI_KEY)
+      'process.env.VITE_SERPAPI_KEY': JSON.stringify(env.VITE_SERPAPI_KEY),
+      // Expose Vertex proxy URL to browser globals
+      '__VITE_VERTEX_PROXY_URL__': JSON.stringify(env.VITE_VERTEX_PROXY_URL || ''),
     },
     resolve: {
       alias: {
@@ -188,6 +190,15 @@ export default defineConfig(({ mode }) => {
         ? { https: { key: fs.readFileSync(HTTPS_KEY_PATH), cert: fs.readFileSync(HTTPS_CERT_PATH) } }
         : {}),
       proxy: {
+        // Vertex AI backend — əsas AI endpoint-lər
+        '/api/chat-stream': { target: 'https://win-2kt3go0vsco.taile7e06c.ts.net', changeOrigin: true, secure: false },
+        '/api/ask':         { target: 'https://win-2kt3go0vsco.taile7e06c.ts.net', changeOrigin: true, secure: false },
+        '/api/chat':        { target: 'https://win-2kt3go0vsco.taile7e06c.ts.net', changeOrigin: true, secure: false },
+        '/api/gemini-tts':  { target: 'https://win-2kt3go0vsco.taile7e06c.ts.net', changeOrigin: true, secure: false },
+        '/api/auth':        { target: 'https://win-2kt3go0vsco.taile7e06c.ts.net', changeOrigin: true, secure: false },
+        '/api/history':     { target: 'https://win-2kt3go0vsco.taile7e06c.ts.net', changeOrigin: true, secure: false },
+        '/api/health':      { target: 'https://win-2kt3go0vsco.taile7e06c.ts.net', changeOrigin: true, secure: false },
+        // Digər /api endpoint-lər (translate, TTS backend, vs.) — köhnə backend
         '/api': {
           target: 'http://localhost:8000',
           changeOrigin: true,

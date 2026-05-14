@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NovEra</string>
+    <string name="title_activity_main">NovEra</string>
+    <string name="package_name">com.novera.app</string>
+    <string name="custom_url_scheme">com.novera.app</string>
+</resources>

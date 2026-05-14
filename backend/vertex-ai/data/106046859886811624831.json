@@ -1,0 +1,26 @@
+{
+  "history": [
+    {
+      "id": "1778497223969",
+      "role": "user",
+      "text": "Hava necədi?"
+    },
+    {
+      "id": "1778497223970",
+      "role": "model",
+      "text": "NovEra-yam və NovEra şirkəti tərəfindən yaradılmışam.\n\nBakıda hava hazırda günəşlidir. Temperatur 22 °C (71 °F) təşkil edir və24 °C (76 °F) kimi hiss olunur. Rütubət 58% civarındadır. Yağış ehtimalı 0%-dir.\n\nBu gün Bakıdagündüz hava günəşli, gecə isə aydın olacaq. Yağış ehtimalı gecə 10%-dir. Temperatur 16 °C (61 °F) ilə 22 °C (71 °F) arasında dəyişəcək.",
+      "sources": [
+        {
+          "uri": "https://www.google.com/search?q=weather+in+Baku",
+          "title": "Weather information for Baku",
+          "index": 1
+        }
+      ],
+      "related": [],
+      "isLoading": true,
+      "images": [],
+      "videos": [],
+      "progressStep": 3
+    }
+  ]
+}

@@ -569,7 +569,7 @@ const LiveConversationView: React.FC<LiveConversationViewProps> = ({ onQuery, on
             <div className="rounded-[1.25rem] overflow-hidden border border-white/10 bg-black/30 shadow-2xl backdrop-blur-sm transition-all duration-300 ease-out" style={{ width: 'clamp(320px, 60vw, 560px)', aspectRatio: '16 / 9' }}>
               <CameraView onFrame={handleFrame} facingMode={facingMode} />
             </div>
-            <div className="mt-3 md:mt-4 px-6 py-3 rounded-xl border border-white/10 bg-white/10 backdrop-blur-md text-white/90 text-sm md:text-base shadow-xl max-w-[min(85vw,560px)] text-center whitespace-pre-wrap break-words leading-relaxed select-none relative">
+            <div className="mt-3 md:mt-4 px-6 py-4 rounded-2xl bg-black/40 border border-white/5 backdrop-blur-xl text-white/90 text-[15px] md:text-base shadow-lg max-w-[min(85vw,560px)] text-center whitespace-pre-wrap break-words leading-relaxed select-none relative">
               {renderedAnswer
                 ? `Nova AI: ${renderedAnswer}`
                 : (status === 'listening' ? (liveText || 'Dinləyir...')
@@ -577,13 +577,6 @@ const LiveConversationView: React.FC<LiveConversationViewProps> = ({ onQuery, on
                   : status === 'connecting' ? 'Bağlanır...'
                   : status === 'processing' ? 'Emal edilir...'
                   : 'Səsləndirir...')}
-            </div>
-            {/* Corner accents for visual parity with camera-off */}
-            <div className="pointer-events-none">
-              <div className="absolute -left-1.5 -top-1.5 w-3 h-3 border-t-2 border-l-2 rounded-tl-sm border-cyan-400/70"></div>
-              <div className="absolute -right-1.5 -top-1.5 w-3 h-3 border-t-2 border-r-2 rounded-tr-sm border-cyan-400/70"></div>
-              <div className="absolute -left-1.5 -bottom-1.5 w-3 h-3 border-b-2 border-l-2 rounded-bl-sm border-cyan-400/70"></div>
-              <div className="absolute -right-1.5 -bottom-1.5 w-3 h-3 border-b-2 border-r-2 rounded-br-sm border-cyan-400/70"></div>
             </div>
             {renderLiveVisuals()}
           </div>
@@ -620,7 +613,7 @@ const LiveConversationView: React.FC<LiveConversationViewProps> = ({ onQuery, on
           {/* Prompt bubble below mic */}
           <div className="mt-5">
             <div className={`relative ${isVoiceMenuOpen ? 'opacity-0 pointer-events-none' : ''}`}>
-              <div className="px-6 py-3 rounded-xl border border-white/10 bg-white/10 backdrop-blur-md text-white/90 text-sm md:text-base shadow-xl max-w-[min(85vw,560px)] text-center whitespace-pre-wrap break-words leading-relaxed">
+              <div className="px-6 py-4 rounded-2xl bg-black/40 border border-white/5 backdrop-blur-xl text-white/90 text-[15px] md:text-base shadow-lg max-w-[min(85vw,560px)] text-center whitespace-pre-wrap break-words leading-relaxed">
                 {renderedAnswer
                   ? `Nova AI: ${renderedAnswer}`
                   : (status === 'listening' ? (liveText || 'Dinləyir...')
@@ -628,13 +621,6 @@ const LiveConversationView: React.FC<LiveConversationViewProps> = ({ onQuery, on
                     : status === 'connecting' ? 'Bağlanır...'
                     : status === 'processing' ? 'Emal edilir...'
                     : 'Səsləndirir...')}
-              </div>
-              {/* Corner accents */}
-              <div className="pointer-events-none">
-                <div className="absolute -left-1.5 -top-1.5 w-3 h-3 border-t-2 border-l-2 rounded-tl-sm border-cyan-400/70"></div>
-                <div className="absolute -right-1.5 -top-1.5 w-3 h-3 border-t-2 border-r-2 rounded-tr-sm border-cyan-400/70"></div>
-                <div className="absolute -left-1.5 -bottom-1.5 w-3 h-3 border-b-2 border-l-2 rounded-bl-sm border-cyan-400/70"></div>
-                <div className="absolute -right-1.5 -bottom-1.5 w-3 h-3 border-b-2 border-r-2 rounded-br-sm border-cyan-400/70"></div>
               </div>
             </div>
             {renderLiveVisuals()}
