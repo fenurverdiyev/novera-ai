@@ -1,0 +1,8 @@
+{
+  "name": "NovEra AI Səs",
+  "description": "A voice-first AI assistant powered by Gemini Live, allowing for real-time conversations using voice and camera input.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
