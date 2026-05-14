@@ -27,7 +27,18 @@ function loadCredentials() {
   // 1. Priority: GOOGLE_SA_JSON environment variable
   if (process.env.GOOGLE_SA_JSON) {
     try {
-      return JSON.parse(process.env.GOOGLE_SA_JSON);
+      let jsonStr = process.env.GOOGLE_SA_JSON;
+      // Əgər dəyər dırnaq içindədirsə, dırnaqları sil (Render xətası üçün)
+      if (jsonStr.startsWith('"') && jsonStr.endsWith('"')) {
+        jsonStr = jsonStr.slice(1, -1).replace(/\\"/g, '"');
+      }
+      
+      const parsed = JSON.parse(jsonStr);
+      // Private key-dəki sətir atlamalarını düzəlt
+      if (parsed.private_key) {
+        parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+      }
+      return parsed;
     } catch (e) {
       console.error('❌ GOOGLE_SA_JSON parse error:', e.message);
     }
